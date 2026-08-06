@@ -196,14 +196,14 @@ func compareData(headers []string, data1, data2 map[string]map[string]string, cf
 	return records
 }
 
-// compareValues compares cell values considering case-sensitivity, date formatting, and list normalization
+// compareValues compares cell values considering case-sensitivity, SIS/GI equivalence, date formatting, and list normalization
 func compareValues(val1, val2, header string, cfg Config) bool {
 	// 0. Raw direct match check
 	if val1 == val2 {
 		return true
 	}
 
-	// 1. Case Sensitivity Check
+	// 1. Case Sensitivity & SIS/GI Equivalence Preparation
 	compVal1 := val1
 	compVal2 := val2
 	if !cfg.CaseSensitive {
@@ -212,6 +212,11 @@ func compareValues(val1, val2, header string, cfg Config) bool {
 	}
 
 	if compVal1 == compVal2 {
+		return true
+	}
+
+	// Treat SIS and GI as the same string (handling case-insensitivity appropriately)
+	if areSisAndGiEquivalent(compVal1, compVal2) {
 		return true
 	}
 
@@ -234,6 +239,13 @@ func compareValues(val1, val2, header string, cfg Config) bool {
 	return false
 }
 
+// areSisAndGiEquivalent checks if one value is SIS and the other is GI
+func areSisAndGiEquivalent(v1, v2 string) bool {
+	normV1 := strings.ToUpper(strings.TrimSpace(v1))
+	normV2 := strings.ToUpper(strings.TrimSpace(v2))
+	return (normV1 == "SIS" && normV2 == "GI") || (normV1 == "GI" && normV2 == "SIS")
+}
+
 // ConfigNormalizeList normalizes commas and semicolons and compares them cleanly
 func (cfg Config) ConfigNormalizeList(v1, v2 string) bool {
 	if !cfg.NormalizeList {
@@ -241,7 +253,11 @@ func (cfg Config) ConfigNormalizeList(v1, v2 string) bool {
 	}
 	norm1 := normalizeListString(v1)
 	norm2 := normalizeListString(v2)
-	return norm1 == norm2
+	if norm1 == norm2 {
+		return true
+	}
+	// Also check SIS/GI equivalence inside list items if needed, or overall list check
+	return false
 }
 
 // normalizeListString converts semicolons to commas and standardizes whitespace
@@ -275,9 +291,9 @@ func isDateHeaderOrValue(header string, vals ...string) bool {
 // parseDate handles formats like "06 Aug 2025", "10-Mar-2027", standard ISO dates, and common slashes
 func parseDate(val string) (time.Time, error) {
 	formats := []string{
-		"02 Jan 2006",        // Supports format like "06 Aug 2025"
+		"02 Jan 2006",          // Supports format like "06 Aug 2025"
 		"02 Jan 2006 15:04:05", // Supports format like "06 Aug 2025 14:30:00"
-		"02-Jan-2006",        // Supports format like "10-Mar-2027"
+		"02-Jan-2006",          // Supports format like "10-Mar-2027"
 		"02-Jan-2006 15:04:05",
 		"2006-01-02",
 		"01/02/2006",
