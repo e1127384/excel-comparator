@@ -19,6 +19,7 @@ type Config struct {
 	OutputFile    string
 	CaseSensitive bool
 	StrictDate    bool
+	NormalizeList bool
 }
 
 // DiffRecord represents a single discrepancy or missing case for the output excel
@@ -39,6 +40,7 @@ func main() {
 	output := flag.String("output", "comparison_report.xlsx", "Path for the output Excel report")
 	caseSensitive := flag.Bool("case-sensitive", false, "Enable case-sensitive comparison (true/false)")
 	strictDate := flag.Bool("strict-date", false, "Enable strict date format comparison (true/false)")
+	normalizeList := flag.Bool("normalize-list", true, "Treat comma and semicolon lists (e.g., 'a, b' vs 'a; b') as equal (true/false)")
 	flag.Parse()
 
 	if *file1 == "" || *file2 == "" {
@@ -53,6 +55,7 @@ func main() {
 		OutputFile:    *output,
 		CaseSensitive: *caseSensitive,
 		StrictDate:    *strictDate,
+		NormalizeList: *normalizeList,
 	}
 
 	fmt.Printf("Comparing:\n  File 1: %s [%s]\n  File 2: %s [%s]\n\n", cfg.File1, cfg.Sheet1, cfg.File2, cfg.Sheet2)
@@ -193,19 +196,31 @@ func compareData(headers []string, data1, data2 map[string]map[string]string, cf
 	return records
 }
 
-// compareValues compares cell values considering case-sensitivity and date formatting
+// compareValues compares cell values considering case-sensitivity, date formatting, and list normalization
 func compareValues(val1, val2, header string, cfg Config) bool {
-	// 1. Case Sensitivity Check
-	if !cfg.CaseSensitive {
-		val1 = strings.ToLower(val1)
-		val2 = strings.ToLower(val2)
-	}
-
+	// 0. Raw direct match check
 	if val1 == val2 {
 		return true
 	}
 
-	// 2. Date Format Sensitivity Check (ignoring time component)
+	// 1. Case Sensitivity Check
+	compVal1 := val1
+	compVal2 := val2
+	if !cfg.CaseSensitive {
+		compVal1 = strings.ToLower(compVal1)
+		compVal2 = strings.ToLower(compVal2)
+	}
+
+	if compVal1 == compVal2 {
+		return true
+	}
+
+	// 2. List Separator Normalization (e.g., ',' vs ';')
+	if cfg.ConfigNormalizeList(compVal1, compVal2) {
+		return true
+	}
+
+	// 3. Date Format Sensitivity Check (ignoring time component)
 	if !cfg.StrictDate && isDateHeaderOrValue(header, val1, val2) {
 		parsed1, err1 := parseDate(val1)
 		parsed2, err2 := parseDate(val2)
@@ -217,6 +232,32 @@ func compareValues(val1, val2, header string, cfg Config) bool {
 	}
 
 	return false
+}
+
+// ConfigNormalizeList normalizes commas and semicolons and compares them cleanly
+func (cfg Config) ConfigNormalizeList(v1, v2 string) bool {
+	if !cfg.NormalizeList {
+		return false
+	}
+	norm1 := normalizeListString(v1)
+	norm2 := normalizeListString(v2)
+	return norm1 == norm2
+}
+
+// normalizeListString converts semicolons to commas and standardizes whitespace
+func normalizeListString(s string) string {
+	// Replace all semicolons with commas
+	s = strings.ReplaceAll(s, ";", ",")
+	parts := strings.Split(s, ",")
+	var cleaned []string
+	for _, p := range parts {
+		trimmed := strings.TrimSpace(p)
+		if trimmed != "" {
+			cleaned = append(cleaned, trimmed)
+		}
+	}
+	// Join back with a uniform comma-space format
+	return strings.Join(cleaned, ", ")
 }
 
 // isDateHeaderOrValue checks if a field name or value indicates a date
@@ -259,23 +300,19 @@ func writeReportToExcel(outputPath string, records []DiffRecord) error {
 	f := excelize.NewFile()
 	sheetName := "Comparison Report"
 	
-	// Create or rename sheet
 	index, err := f.NewSheet(sheetName)
 	if err != nil {
 		return err
 	}
 	f.SetActiveSheet(index)
-	// Remove default Sheet1 if it exists
 	f.DeleteSheet("Sheet1")
 
-	// Write Headers
 	headers := []string{"CaseID", "Field", "Sheet1 Value", "Sheet2 Value", "Status"}
 	for colIdx, header := range headers {
 		cell, _ := excelize.CoordinatesToCellName(colIdx+1, 1)
 		f.SetCellValue(sheetName, cell, header)
 	}
 
-	// Write Data Rows
 	for rowIdx, rec := range records {
 		rNum := rowIdx + 2
 		f.SetCellValue(sheetName, fmt.Sprintf("A%d", rNum), rec.CaseID)
@@ -285,7 +322,6 @@ func writeReportToExcel(outputPath string, records []DiffRecord) error {
 		f.SetCellValue(sheetName, fmt.Sprintf("E%d", rNum), rec.Status)
 	}
 
-	// Save file
 	if err := f.SaveAs(outputPath); err != nil {
 		return err
 	}
