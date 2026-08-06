@@ -11,11 +11,12 @@ It handles missing records, field-by-field discrepancies, flexible date normaliz
 * **Primary Key Mapping**: Uses the first column as the unique `CaseID`.
 * **Missing Record Analysis**: Identifies cases present in Sheet 1 but completely missing in Sheet 2.
 * **Field-by-Field Mismatch Detection**: Compares every common field column-by-column.
-* **Migration Mapping Rules (`-mapping`)**: Translates old field values to new expected migration values using an external mapping spreadsheet (`FieldName`, `OldValue`, `NewValue`).
+* **Migration Mapping Rules (`mappingFile`)**: Translates old field values to new expected migration values using an external mapping spreadsheet (`FieldName`, `OldValue`, `NewValue`).
 * **SIS / GI Equivalence**: Automatically treats the strings `SIS` and `GI` as identical.
-* **Date Normalization (`-strict-date`)**: Automatically parses and equates general/text date formats like `06 Aug 2025` and `10-Mar-2027`, while ignoring time components.
-* **List Separator Normalization (`-normalize-list`)**: Treats comma-separated and semicolon-separated items (e.g., `a, b` vs `a; b`) identically.
-* **Case Sensitivity (`-case-sensitive`)**: Configures whether string comparisons ignore letter casing.
+* **Date Normalization (`strictDate`)**: Automatically parses and equates general/text date formats like `06 Aug 2025` and `10-Mar-2027`, while ignoring time components.
+* **List Separator Normalization (`normalizeList`)**: Treats comma-separated and semicolon-separated items (e.g., `a, b` vs `a; b`) identically.
+* **Case Sensitivity (`caseSensitive`)**: Configures whether string comparisons ignore letter casing.
+* **Field Selection (`compareFields`)**: Lets you compare only a specific list of fields.
 * **Excel Export**: Writes a clean summary report containing columns: `CaseID`, `Field`, `Sheet1 Value`, `Sheet2 Value`, and `Status`.
 
 ---
@@ -57,19 +58,54 @@ Save the Go source code into a file named `main.go` in your project root directo
 
 ---
 
-## CLI Configuration Flags Reference
+## Configuration File
+
+The CLI now reads parameters from a YAML config file.
+
+### Runtime Flag
 
 | Flag | Default | Description |
 | --- | --- | --- |
-| `-f1` | `""` | **(Required)** Path to the first Excel file. |
-| `-f2` | `""` | **(Required)** Path to the second Excel file. |
-| `-s1` | `"Sheet1"` | Sheet name for File 1. |
-| `-s2` | `"Sheet1"` | Sheet name for File 2. |
-| `-mapping` | `""` | Path to migration mapping Excel file (`FieldName`, `OldValue`, `NewValue`). |
-| `-output` | `"comparison_report.xlsx"` | File path for the generated output Excel report. |
-| `-case-sensitive` | `false` | Enable or disable case-sensitive text comparison (`true`/`false`). |
-| `-strict-date` | `false` | Enable or disable strict raw string date formatting comparison (`true`/`false`). |
-| `-normalize-list` | `true` | Treat comma and semicolon lists (e.g., `a, b` vs `a; b`) as equal (`true`/`false`). |
+| `-config` | `"config.yaml"` | Path to the YAML configuration file. |
+
+### Config YAML Fields
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `file1` | `""` | **(Required)** Path to the first Excel file. |
+| `file2` | `""` | **(Required)** Path to the second Excel file. |
+| `sheet1` | `"Sheet1"` | Sheet name for File 1. |
+| `sheet2` | `"Sheet1"` | Sheet name for File 2. |
+| `mappingFile` | `""` | Path to migration mapping Excel file (`FieldName`, `OldValue`, `NewValue`). |
+| `outputFile` | `"comparison_report.xlsx"` | File path for generated report. |
+| `caseSensitive` | `false` | Enable or disable case-sensitive comparison. |
+| `strictDate` | `false` | Enable or disable strict raw string date comparison. |
+| `normalizeList` | `true` | Treat comma and semicolon lists as equal. |
+| `compareFields` | `[]` | Optional list of field names to compare. Empty means compare all headers. |
+
+Example `config.yaml`:
+
+```yaml
+file1: file1.xlsx
+file2: file2.xlsx
+sheet1: SheetA
+sheet2: SheetB
+mappingFile: migration_rules.xlsx
+outputFile: comparison_report.xlsx
+caseSensitive: false
+strictDate: false
+normalizeList: true
+compareFields:
+  - caseid
+  - status
+  - start_date
+```
+
+You can start from the committed template:
+
+```bash
+cp config.yaml.example config.yaml
+```
 
 ---
 
@@ -80,18 +116,20 @@ Save the Go source code into a file named `main.go` in your project root directo
 Performs case-insensitive checks, handles text date variations (like `06 Aug 2025`), strips time components, treats `SIS` and `GI` as equal, and normalizes list punctuation:
 
 ```bash
-go run main.go -f1 file1.xlsx -f2 file2.xlsx
+go run main.go
+```
 
+Or provide a custom path:
+
+```bash
+go run main.go -config /path/to/config.yaml
 ```
 
 ### 2. Running with Migration Mapping Rules
 
 If you are tracking field value migrations or transformations (e.g., changing status codes or mapping values across columns):
 
-```bash
-go run main.go -f1 file1.xlsx -f2 file2.xlsx -mapping migration_rules.xlsx
-
-```
+Set `mappingFile: migration_rules.xlsx` in `config.yaml`.
 
 *Note: The migration mapping file (`migration_rules.xlsx`) must contain three columns: `FieldName`, `OldValue`, and `NewValue`.*
 
@@ -99,18 +137,18 @@ go run main.go -f1 file1.xlsx -f2 file2.xlsx -mapping migration_rules.xlsx
 
 If your target data lives on custom worksheet tabs:
 
-```bash
-go run main.go -f1 file1.xlsx -f2 file2.xlsx -s1 "SheetA" -s2 "SheetB"
-
-```
+Set `sheet1` and `sheet2` in `config.yaml`.
 
 ### 4. Strict Comparison Mode
 
 Enforces strict checks (exact case matching, exact date strings, literal list separators, and strict SIS/GI differentiation):
 
-```bash
-go run main.go -f1 file1.xlsx -f2 file2.xlsx -case-sensitive=true -strict-date=true -normalize-list=false
+Set values in `config.yaml`:
 
+```yaml
+caseSensitive: true
+strictDate: true
+normalizeList: false
 ```
 
 ---

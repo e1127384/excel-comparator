@@ -4,23 +4,26 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/xuri/excelize/v2"
+	"gopkg.in/yaml.v3"
 )
 
 // Config holds CLI configuration flags
 type Config struct {
-	File1         string
-	File2         string
-	Sheet1        string
-	Sheet2        string
-	MappingFile   string
-	OutputFile    string
-	CaseSensitive bool
-	StrictDate    bool
-	NormalizeList bool
+	File1         string   `yaml:"file1"`
+	File2         string   `yaml:"file2"`
+	Sheet1        string   `yaml:"sheet1"`
+	Sheet2        string   `yaml:"sheet2"`
+	MappingFile   string   `yaml:"mappingFile"`
+	OutputFile    string   `yaml:"outputFile"`
+	CaseSensitive bool     `yaml:"caseSensitive"`
+	StrictDate    bool     `yaml:"strictDate"`
+	NormalizeList bool     `yaml:"normalizeList"`
+	CompareFields []string `yaml:"compareFields"`
 }
 
 // DiffRecord represents a single discrepancy or missing case for the output excel
@@ -36,32 +39,17 @@ type DiffRecord struct {
 type MappingRule map[string]map[string]string
 
 func main() {
-	// Define CLI flags
-	file1 := flag.String("f1", "", "Path to the first Excel file (required)")
-	file2 := flag.String("f2", "", "Path to the second Excel file (required)")
-	sheet1 := flag.String("s1", "Sheet1", "Sheet name for file 1")
-	sheet2 := flag.String("s2", "Sheet1", "Sheet name for file 2")
-	mappingFile := flag.String("mapping", "", "Path to migration mapping Excel file (FieldName, OldValue, NewValue)")
-	output := flag.String("output", "comparison_report.xlsx", "Path for the output Excel report")
-	caseSensitive := flag.Bool("case-sensitive", false, "Enable case-sensitive comparison (true/false)")
-	strictDate := flag.Bool("strict-date", false, "Enable strict date format comparison (true/false)")
-	normalizeList := flag.Bool("normalize-list", true, "Treat comma and semicolon lists (e.g., 'a, b' vs 'a; b') as equal (true/false)")
+	// Define CLI flag for config file path
+	configPath := flag.String("config", "config.yaml", "Path to configuration YAML file")
 	flag.Parse()
 
-	if *file1 == "" || *file2 == "" {
-		log.Fatal("Error: Both -f1 and -f2 file paths are required. Use -h for help.")
+	cfg, err := loadConfig(*configPath)
+	if err != nil {
+		log.Fatalf("Failed to load config file: %v", err)
 	}
 
-	cfg := Config{
-		File1:         *file1,
-		File2:         *file2,
-		Sheet1:        *sheet1,
-		Sheet2:        *sheet2,
-		MappingFile:   *mappingFile,
-		OutputFile:    *output,
-		CaseSensitive: *caseSensitive,
-		StrictDate:    *strictDate,
-		NormalizeList: *normalizeList,
+	if cfg.File1 == "" || cfg.File2 == "" {
+		log.Fatal("Error: file1 and file2 are required in config.yaml")
 	}
 
 	fmt.Printf("Comparing:\n  File 1: %s [%s]\n  File 2: %s [%s]\n", cfg.File1, cfg.Sheet1, cfg.File2, cfg.Sheet2)
@@ -72,7 +60,6 @@ func main() {
 
 	// Load Migration Mapping Rules if provided
 	var mappingRules MappingRule
-	var err error
 	if cfg.MappingFile != "" {
 		mappingRules, err = loadMappingRules(cfg.MappingFile)
 		if err != nil {
@@ -91,8 +78,17 @@ func main() {
 		log.Fatalf("Failed to read File 2: %v", err)
 	}
 
+	fieldsToCompare, err := resolveFieldsToCompare(headers1, cfg.CompareFields)
+	if err != nil {
+		log.Fatalf("Failed to resolve compare fields: %v", err)
+	}
+
+	if len(cfg.CompareFields) > 0 {
+		fmt.Printf("  Compare Fields: %s\n", strings.Join(fieldsToCompare, ", "))
+	}
+
 	// Run Analysis and collect discrepancy records
-	records := compareData(headers1, data1, data2, mappingRules, cfg)
+	records := compareData(fieldsToCompare, data1, data2, mappingRules, cfg)
 
 	// Export results to Excel
 	if err := writeReportToExcel(cfg.OutputFile, records); err != nil {
@@ -100,6 +96,56 @@ func main() {
 	}
 
 	fmt.Printf("\n[Success] Analysis report successfully generated: %s\n", cfg.OutputFile)
+}
+
+// loadConfig reads configuration from a YAML file and applies defaults
+func loadConfig(configPath string) (Config, error) {
+	cfg := Config{
+		Sheet1:        "Sheet1",
+		Sheet2:        "Sheet1",
+		OutputFile:    "comparison_report.xlsx",
+		NormalizeList: true,
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return Config{}, err
+	}
+
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return Config{}, err
+	}
+
+	return cfg, nil
+}
+
+// resolveFieldsToCompare returns header names to compare, optionally filtered by configured fields
+func resolveFieldsToCompare(headers []string, compareFields []string) ([]string, error) {
+	if len(compareFields) == 0 {
+		return headers, nil
+	}
+
+	headerMap := make(map[string]string, len(headers))
+	for _, h := range headers {
+		headerMap[strings.ToLower(strings.TrimSpace(h))] = h
+	}
+
+	fieldsToCompare := make([]string, 0, len(compareFields))
+	seen := make(map[string]struct{}, len(compareFields))
+	for _, field := range compareFields {
+		normalized := strings.ToLower(strings.TrimSpace(field))
+		header, ok := headerMap[normalized]
+		if !ok {
+			return nil, fmt.Errorf("field %q not found in Sheet 1 headers", field)
+		}
+		if _, exists := seen[header]; exists {
+			continue
+		}
+		seen[header] = struct{}{}
+		fieldsToCompare = append(fieldsToCompare, header)
+	}
+
+	return fieldsToCompare, nil
 }
 
 // loadMappingRules reads the migration Excel file containing FieldName, OldValue, NewValue
@@ -183,7 +229,7 @@ func loadExcelData(filePath, sheetName string) ([]string, map[string]map[string]
 }
 
 // compareData performs the differential analysis and returns collected records
-func compareData(headers []string, data1, data2 map[string]map[string]string, mappingRules MappingRule, cfg Config) []DiffRecord {
+func compareData(fieldsToCompare []string, data1, data2 map[string]map[string]string, mappingRules MappingRule, cfg Config) []DiffRecord {
 	var records []DiffRecord
 
 	fmt.Println("================== ANALYSIS REPORT ==================")
@@ -221,7 +267,7 @@ func compareData(headers []string, data1, data2 map[string]map[string]string, ma
 		commonCount++
 		caseHasDiff := false
 
-		for _, header := range headers {
+		for _, header := range fieldsToCompare {
 			val1 := row1[header]
 			val2 := row2[header]
 
@@ -391,7 +437,7 @@ func parseDate(val string) (time.Time, error) {
 func writeReportToExcel(outputPath string, records []DiffRecord) error {
 	f := excelize.NewFile()
 	sheetName := "Comparison Report"
-	
+
 	index, err := f.NewSheet(sheetName)
 	if err != nil {
 		return err
