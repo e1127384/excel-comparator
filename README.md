@@ -60,15 +60,15 @@ Save the Go source code into a file named `main.go` in your project root directo
 
 ## Configuration File
 
-The CLI now reads parameters from a JSON config file.
+The CLI now reads parameters from a YAML config file.
 
 ### Runtime Flag
 
 | Flag | Default | Description |
 | --- | --- | --- |
-| `-config` | `"config.json"` | Path to the JSON configuration file. |
+| `-config` | `"config.yaml"` | Path to the YAML configuration file. |
 
-### Config JSON Fields
+### Config YAML Fields
 
 | Key | Default | Description |
 | --- | --- | --- |
@@ -83,27 +83,28 @@ The CLI now reads parameters from a JSON config file.
 | `normalizeList` | `true` | Treat comma and semicolon lists as equal. |
 | `confirmFields` | `[]` | Optional list of field names to compare. Empty means compare all headers. |
 
-Example `config.json`:
+Example `config.yaml`:
 
-```json
-{
-  "file1": "file1.xlsx",
-  "file2": "file2.xlsx",
-  "sheet1": "SheetA",
-  "sheet2": "SheetB",
-  "mappingFile": "migration_rules.xlsx",
-  "outputFile": "comparison_report.xlsx",
-  "caseSensitive": false,
-  "strictDate": false,
-  "normalizeList": true,
-  "confirmFields": ["caseid", "status", "start_date"]
-}
+```yaml
+file1: file1.xlsx
+file2: file2.xlsx
+sheet1: SheetA
+sheet2: SheetB
+mappingFile: migration_rules.xlsx
+outputFile: comparison_report.xlsx
+caseSensitive: false
+strictDate: false
+normalizeList: true
+confirmFields:
+  - caseid
+  - status
+  - start_date
 ```
 
 You can start from the committed template:
 
 ```bash
-cp config.json.example config.json
+cp config.yaml.example config.yaml
 ```
 
 ---
@@ -121,14 +122,14 @@ go run main.go
 Or provide a custom path:
 
 ```bash
-go run main.go -config /path/to/config.json
+go run main.go -config /path/to/config.yaml
 ```
 
 ### 2. Running with Migration Mapping Rules
 
 If you are tracking field value migrations or transformations (e.g., changing status codes or mapping values across columns):
 
-Set `"mappingFile": "migration_rules.xlsx"` in `config.json`.
+Set `mappingFile: migration_rules.xlsx` in `config.yaml`.
 
 *Note: The migration mapping file (`migration_rules.xlsx`) must contain three columns: `FieldName`, `OldValue`, and `NewValue`.*
 
@@ -136,20 +137,18 @@ Set `"mappingFile": "migration_rules.xlsx"` in `config.json`.
 
 If your target data lives on custom worksheet tabs:
 
-Set `"sheet1"` and `"sheet2"` in `config.json`.
+Set `sheet1` and `sheet2` in `config.yaml`.
 
 ### 4. Strict Comparison Mode
 
 Enforces strict checks (exact case matching, exact date strings, literal list separators, and strict SIS/GI differentiation):
 
-Set values in `config.json`:
+Set values in `config.yaml`:
 
-```json
-{
-  "caseSensitive": true,
-  "strictDate": true,
-  "normalizeList": false
-}
+```yaml
+caseSensitive: true
+strictDate: true
+normalizeList: false
 ```
 
 ---

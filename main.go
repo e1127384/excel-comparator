@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -10,20 +9,21 @@ import (
 	"time"
 
 	"github.com/xuri/excelize/v2"
+	"gopkg.in/yaml.v3"
 )
 
 // Config holds CLI configuration flags
 type Config struct {
-	File1         string   `json:"file1"`
-	File2         string   `json:"file2"`
-	Sheet1        string   `json:"sheet1"`
-	Sheet2        string   `json:"sheet2"`
-	MappingFile   string   `json:"mappingFile"`
-	OutputFile    string   `json:"outputFile"`
-	CaseSensitive bool     `json:"caseSensitive"`
-	StrictDate    bool     `json:"strictDate"`
-	NormalizeList bool     `json:"normalizeList"`
-	ConfirmFields []string `json:"confirmFields"`
+	File1         string   `yaml:"file1"`
+	File2         string   `yaml:"file2"`
+	Sheet1        string   `yaml:"sheet1"`
+	Sheet2        string   `yaml:"sheet2"`
+	MappingFile   string   `yaml:"mappingFile"`
+	OutputFile    string   `yaml:"outputFile"`
+	CaseSensitive bool     `yaml:"caseSensitive"`
+	StrictDate    bool     `yaml:"strictDate"`
+	NormalizeList bool     `yaml:"normalizeList"`
+	ConfirmFields []string `yaml:"confirmFields"`
 }
 
 // DiffRecord represents a single discrepancy or missing case for the output excel
@@ -40,7 +40,7 @@ type MappingRule map[string]map[string]string
 
 func main() {
 	// Define CLI flag for config file path
-	configPath := flag.String("config", "config.json", "Path to configuration JSON file")
+	configPath := flag.String("config", "config.yaml", "Path to configuration YAML file")
 	flag.Parse()
 
 	cfg, err := loadConfig(*configPath)
@@ -49,7 +49,7 @@ func main() {
 	}
 
 	if cfg.File1 == "" || cfg.File2 == "" {
-		log.Fatal("Error: file1 and file2 are required in config.json")
+		log.Fatal("Error: file1 and file2 are required in config.yaml")
 	}
 
 	fmt.Printf("Comparing:\n  File 1: %s [%s]\n  File 2: %s [%s]\n", cfg.File1, cfg.Sheet1, cfg.File2, cfg.Sheet2)
@@ -98,7 +98,7 @@ func main() {
 	fmt.Printf("\n[Success] Analysis report successfully generated: %s\n", cfg.OutputFile)
 }
 
-// loadConfig reads configuration from a JSON file and applies defaults
+// loadConfig reads configuration from a YAML file and applies defaults
 func loadConfig(configPath string) (Config, error) {
 	cfg := Config{
 		Sheet1:        "Sheet1",
@@ -112,7 +112,7 @@ func loadConfig(configPath string) (Config, error) {
 		return Config{}, err
 	}
 
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return Config{}, err
 	}
 

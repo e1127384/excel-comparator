@@ -1,0 +1,10 @@
+file1: file1.xlsx
+file2: file2.xlsx
+sheet1: Sheet1
+sheet2: Sheet1
+mappingFile: ""
+outputFile: comparison_report.xlsx
+caseSensitive: false
+strictDate: false
+normalizeList: true
+confirmFields: []
