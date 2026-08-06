@@ -8,3 +8,14 @@ caseSensitive: false
 strictDate: false
 normalizeList: true
 compareFields: []
+
+# caseQualifier filters which records from File 1 are included in the comparison.
+# If omitted or empty, all records are considered.
+# Supported operators: = != IN NOT IN
+# Logical operators:   AND OR  (parentheses supported for grouping)
+# Multi-word field names and values are supported.
+# Examples:
+#   caseQualifier: "Status != Cancelled"
+#   caseQualifier: "Status != Cancelled AND Case Id NOT IN (caseid1, caseid2)"
+#   caseQualifier: "(Status = Open OR Status = Pending) AND Priority != Low"
+caseQualifier: ""
