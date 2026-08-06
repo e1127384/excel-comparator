@@ -322,14 +322,14 @@ func applyMapping(field, val1 string, rules MappingRule) string {
 	return val1
 }
 
-// compareValues compares cell values considering case-sensitivity, SIS/GI equivalence, date formatting, and list normalization
+// compareValues compares cell values considering case-sensitivity, date formatting, and list normalization
 func compareValues(val1, val2, header string, cfg Config) bool {
 	// 0. Raw direct match check
 	if val1 == val2 {
 		return true
 	}
 
-	// 1. Case Sensitivity & SIS/GI Equivalence Preparation
+	// 1. Case Sensitivity Preparation
 	compVal1 := val1
 	compVal2 := val2
 	if !cfg.CaseSensitive {
@@ -338,11 +338,6 @@ func compareValues(val1, val2, header string, cfg Config) bool {
 	}
 
 	if compVal1 == compVal2 {
-		return true
-	}
-
-	// Treat SIS and GI as the same string
-	if areSisAndGiEquivalent(compVal1, compVal2) {
 		return true
 	}
 
@@ -363,13 +358,6 @@ func compareValues(val1, val2, header string, cfg Config) bool {
 	}
 
 	return false
-}
-
-// areSisAndGiEquivalent checks if one value is SIS and the other is GI
-func areSisAndGiEquivalent(v1, v2 string) bool {
-	normV1 := strings.ToUpper(strings.TrimSpace(v1))
-	normV2 := strings.ToUpper(strings.TrimSpace(v2))
-	return (normV1 == "SIS" && normV2 == "GI") || (normV1 == "GI" && normV2 == "SIS")
 }
 
 // ConfigNormalizeList normalizes commas and semicolons and compares them cleanly
