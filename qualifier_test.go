@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"testing"
 )
 
@@ -28,7 +27,7 @@ func TestQualifier(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(fmt.Sprintf("%s", tt.expr), func(t *testing.T) {
+		t.Run(tt.expr, func(t *testing.T) {
 			expr, err := parseQualifierExpr(tt.expr)
 			if err != nil {
 				t.Fatalf("parse error: %v", err)
