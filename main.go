@@ -16,6 +16,7 @@ type Config struct {
 	File2         string
 	Sheet1        string
 	Sheet2        string
+	MappingFile   string
 	OutputFile    string
 	CaseSensitive bool
 	StrictDate    bool
@@ -31,12 +32,16 @@ type DiffRecord struct {
 	Status string
 }
 
+// MappingRule stores value translations: FieldName -> {OldVal -> NewVal}
+type MappingRule map[string]map[string]string
+
 func main() {
 	// Define CLI flags
 	file1 := flag.String("f1", "", "Path to the first Excel file (required)")
 	file2 := flag.String("f2", "", "Path to the second Excel file (required)")
 	sheet1 := flag.String("s1", "Sheet1", "Sheet name for file 1")
 	sheet2 := flag.String("s2", "Sheet1", "Sheet name for file 2")
+	mappingFile := flag.String("mapping", "", "Path to migration mapping Excel file (FieldName, OldValue, NewValue)")
 	output := flag.String("output", "comparison_report.xlsx", "Path for the output Excel report")
 	caseSensitive := flag.Bool("case-sensitive", false, "Enable case-sensitive comparison (true/false)")
 	strictDate := flag.Bool("strict-date", false, "Enable strict date format comparison (true/false)")
@@ -52,13 +57,28 @@ func main() {
 		File2:         *file2,
 		Sheet1:        *sheet1,
 		Sheet2:        *sheet2,
+		MappingFile:   *mappingFile,
 		OutputFile:    *output,
 		CaseSensitive: *caseSensitive,
 		StrictDate:    *strictDate,
 		NormalizeList: *normalizeList,
 	}
 
-	fmt.Printf("Comparing:\n  File 1: %s [%s]\n  File 2: %s [%s]\n\n", cfg.File1, cfg.Sheet1, cfg.File2, cfg.Sheet2)
+	fmt.Printf("Comparing:\n  File 1: %s [%s]\n  File 2: %s [%s]\n", cfg.File1, cfg.Sheet1, cfg.File2, cfg.Sheet2)
+	if cfg.MappingFile != "" {
+		fmt.Printf("  Mapping File: %s\n", cfg.MappingFile)
+	}
+	fmt.Println()
+
+	// Load Migration Mapping Rules if provided
+	var mappingRules MappingRule
+	var err error
+	if cfg.MappingFile != "" {
+		mappingRules, err = loadMappingRules(cfg.MappingFile)
+		if err != nil {
+			log.Fatalf("Failed to load mapping file: %v", err)
+		}
+	}
 
 	// Load Data from Excel sheets
 	headers1, data1, err := loadExcelData(cfg.File1, cfg.Sheet1)
@@ -72,7 +92,7 @@ func main() {
 	}
 
 	// Run Analysis and collect discrepancy records
-	records := compareData(headers1, data1, data2, cfg)
+	records := compareData(headers1, data1, data2, mappingRules, cfg)
 
 	// Export results to Excel
 	if err := writeReportToExcel(cfg.OutputFile, records); err != nil {
@@ -80,6 +100,44 @@ func main() {
 	}
 
 	fmt.Printf("\n[Success] Analysis report successfully generated: %s\n", cfg.OutputFile)
+}
+
+// loadMappingRules reads the migration Excel file containing FieldName, OldValue, NewValue
+func loadMappingRules(filePath string) (MappingRule, error) {
+	f, err := excelize.OpenFile(filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	rows, err := f.GetRows(f.GetSheetName(0))
+	if err != nil {
+		return nil, err
+	}
+
+	rules := make(MappingRule)
+
+	// Expecting headers: FieldName, OldValue, NewValue (starting from row index 1)
+	for i := 1; i < len(rows); i++ {
+		row := rows[i]
+		if len(row) < 3 {
+			continue
+		}
+		field := strings.TrimSpace(row[0])
+		oldVal := strings.TrimSpace(row[1])
+		newVal := strings.TrimSpace(row[2])
+
+		if field == "" {
+			continue
+		}
+
+		if rules[field] == nil {
+			rules[field] = make(map[string]string)
+		}
+		rules[field][oldVal] = newVal
+	}
+
+	return rules, nil
 }
 
 // loadExcelData reads an excel sheet and maps CaseID (first column) -> Map[ColumnName]Value
@@ -125,7 +183,7 @@ func loadExcelData(filePath, sheetName string) ([]string, map[string]map[string]
 }
 
 // compareData performs the differential analysis and returns collected records
-func compareData(headers []string, data1, data2 map[string]map[string]string, cfg Config) []DiffRecord {
+func compareData(headers []string, data1, data2 map[string]map[string]string, mappingRules MappingRule, cfg Config) []DiffRecord {
 	var records []DiffRecord
 
 	fmt.Println("================== ANALYSIS REPORT ==================")
@@ -167,16 +225,23 @@ func compareData(headers []string, data1, data2 map[string]map[string]string, cf
 			val1 := row1[header]
 			val2 := row2[header]
 
-			if !compareValues(val1, val2, header, cfg) {
+			// Apply migration mapping if available for this field
+			mappedVal1 := applyMapping(header, val1, mappingRules)
+
+			if !compareValues(mappedVal1, val2, header, cfg) {
 				caseHasDiff = true
+				reportVal1 := val1
+				if mappedVal1 != val1 {
+					reportVal1 = fmt.Sprintf("%s (mapped to %s)", val1, mappedVal1)
+				}
 				records = append(records, DiffRecord{
 					CaseID: caseID,
 					Field:  header,
-					Val1:   val1,
+					Val1:   reportVal1,
 					Val2:   val2,
 					Status: "Mismatch",
 				})
-				fmt.Printf("    * Field [%s] mismatch for Case ID %s: Sheet1='%s' vs Sheet2='%s'\n", header, caseID, val1, val2)
+				fmt.Printf("    * Field [%s] mismatch for Case ID %s: Sheet1='%s' vs Sheet2='%s'\n", header, caseID, reportVal1, val2)
 			}
 		}
 
@@ -194,6 +259,21 @@ func compareData(headers []string, data1, data2 map[string]map[string]string, cf
 	fmt.Println("=============================================")
 
 	return records
+}
+
+// applyMapping translates val1 based on the migration mapping rules if defined
+func applyMapping(field, val1 string, rules MappingRule) string {
+	if rules == nil {
+		return val1
+	}
+	fieldRules, exists := rules[field]
+	if !exists {
+		return val1
+	}
+	if newVal, mapped := fieldRules[val1]; mapped {
+		return newVal
+	}
+	return val1
 }
 
 // compareValues compares cell values considering case-sensitivity, SIS/GI equivalence, date formatting, and list normalization
@@ -215,7 +295,7 @@ func compareValues(val1, val2, header string, cfg Config) bool {
 		return true
 	}
 
-	// Treat SIS and GI as the same string (handling case-insensitivity appropriately)
+	// Treat SIS and GI as the same string
 	if areSisAndGiEquivalent(compVal1, compVal2) {
 		return true
 	}
@@ -253,11 +333,7 @@ func (cfg Config) ConfigNormalizeList(v1, v2 string) bool {
 	}
 	norm1 := normalizeListString(v1)
 	norm2 := normalizeListString(v2)
-	if norm1 == norm2 {
-		return true
-	}
-	// Also check SIS/GI equivalence inside list items if needed, or overall list check
-	return false
+	return norm1 == norm2
 }
 
 // normalizeListString converts semicolons to commas and standardizes whitespace
@@ -291,9 +367,9 @@ func isDateHeaderOrValue(header string, vals ...string) bool {
 // parseDate handles formats like "06 Aug 2025", "10-Mar-2027", standard ISO dates, and common slashes
 func parseDate(val string) (time.Time, error) {
 	formats := []string{
-		"02 Jan 2006",          // Supports format like "06 Aug 2025"
-		"02 Jan 2006 15:04:05", // Supports format like "06 Aug 2025 14:30:00"
-		"02-Jan-2006",          // Supports format like "10-Mar-2027"
+		"02 Jan 2006",
+		"02 Jan 2006 15:04:05",
+		"02-Jan-2006",
 		"02-Jan-2006 15:04:05",
 		"2006-01-02",
 		"01/02/2006",
