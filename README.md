@@ -2,7 +2,7 @@
 
 A robust, high-performance command-line interface (CLI) application written in Go designed to compare two Excel sheets row-by-row based on a primary key (`caseid` in the first column).
 
-It handles missing records, field-by-field discrepancies, flexible date normalization (supporting text/general formats like `06 Aug 2025` and `10-Mar-2027` without time components), list separator normalization (e.g., `,` vs `;`), string equivalence rules (`SIS` and `GI`), data migration mapping transformations, and case-sensitivity toggles, exporting all findings cleanly into an output Excel report.
+It handles missing records, field-by-field discrepancies, flexible date normalization (supporting text/general formats like `06 Aug 2025` and `10-Mar-2027` without time components), list separator normalization (e.g., `,` vs `;`), data migration mapping transformations, and case-sensitivity toggles, exporting all findings cleanly into an output Excel report.
 
 ---
 
@@ -12,7 +12,6 @@ It handles missing records, field-by-field discrepancies, flexible date normaliz
 * **Missing Record Analysis**: Identifies cases present in Sheet 1 but completely missing in Sheet 2.
 * **Field-by-Field Mismatch Detection**: Compares every common field column-by-column.
 * **Migration Mapping Rules (`mappingFile`)**: Translates old field values to new expected migration values using an external mapping spreadsheet (`FieldName`, `OldValue`, `NewValue`).
-* **SIS / GI Equivalence**: Automatically treats the strings `SIS` and `GI` as identical.
 * **Date Normalization (`strictDate`)**: Automatically parses and equates general/text date formats like `06 Aug 2025` and `10-Mar-2027`, while ignoring time components.
 * **List Separator Normalization (`normalizeList`)**: Treats comma-separated and semicolon-separated items (e.g., `a, b` vs `a; b`) identically.
 * **Case Sensitivity (`caseSensitive`)**: Configures whether string comparisons ignore letter casing.
@@ -113,7 +112,7 @@ cp config.yaml.example config.yaml
 
 ### 1. Basic Comparison (Default Settings)
 
-Performs case-insensitive checks, handles text date variations (like `06 Aug 2025`), strips time components, treats `SIS` and `GI` as equal, and normalizes list punctuation:
+Performs case-insensitive checks, handles text date variations (like `06 Aug 2025`), strips time components, and normalizes list punctuation:
 
 ```bash
 go run main.go
@@ -141,7 +140,7 @@ Set `sheet1` and `sheet2` in `config.yaml`.
 
 ### 4. Strict Comparison Mode
 
-Enforces strict checks (exact case matching, exact date strings, literal list separators, and strict SIS/GI differentiation):
+Enforces strict checks (exact case matching, exact date strings, and literal list separators):
 
 Set values in `config.yaml`:
 
