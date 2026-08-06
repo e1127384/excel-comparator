@@ -246,7 +246,6 @@ func (cfg Config) ConfigNormalizeList(v1, v2 string) bool {
 
 // normalizeListString converts semicolons to commas and standardizes whitespace
 func normalizeListString(s string) string {
-	// Replace all semicolons with commas
 	s = strings.ReplaceAll(s, ";", ",")
 	parts := strings.Split(s, ",")
 	var cleaned []string
@@ -256,7 +255,6 @@ func normalizeListString(s string) string {
 			cleaned = append(cleaned, trimmed)
 		}
 	}
-	// Join back with a uniform comma-space format
 	return strings.Join(cleaned, ", ")
 }
 
@@ -274,10 +272,12 @@ func isDateHeaderOrValue(header string, vals ...string) bool {
 	return false
 }
 
-// parseDate handles formats like "10-Mar-2027", standard ISO dates, and common slashes
+// parseDate handles formats like "06 Aug 2025", "10-Mar-2027", standard ISO dates, and common slashes
 func parseDate(val string) (time.Time, error) {
 	formats := []string{
-		"02-Jan-2006",
+		"02 Jan 2006",        // Supports format like "06 Aug 2025"
+		"02 Jan 2006 15:04:05", // Supports format like "06 Aug 2025 14:30:00"
+		"02-Jan-2006",        // Supports format like "10-Mar-2027"
 		"02-Jan-2006 15:04:05",
 		"2006-01-02",
 		"01/02/2006",
