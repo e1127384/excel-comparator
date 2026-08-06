@@ -23,7 +23,7 @@ type Config struct {
 	CaseSensitive bool     `yaml:"caseSensitive"`
 	StrictDate    bool     `yaml:"strictDate"`
 	NormalizeList bool     `yaml:"normalizeList"`
-	ConfirmFields []string `yaml:"confirmFields"`
+	CompareFields []string `yaml:"compareFields"`
 }
 
 // DiffRecord represents a single discrepancy or missing case for the output excel
@@ -78,13 +78,13 @@ func main() {
 		log.Fatalf("Failed to read File 2: %v", err)
 	}
 
-	fieldsToCompare, err := resolveFieldsToCompare(headers1, cfg.ConfirmFields)
+	fieldsToCompare, err := resolveFieldsToCompare(headers1, cfg.CompareFields)
 	if err != nil {
-		log.Fatalf("Failed to resolve confirm fields: %v", err)
+		log.Fatalf("Failed to resolve compare fields: %v", err)
 	}
 
-	if len(cfg.ConfirmFields) > 0 {
-		fmt.Printf("  Confirm Fields: %s\n", strings.Join(fieldsToCompare, ", "))
+	if len(cfg.CompareFields) > 0 {
+		fmt.Printf("  Compare Fields: %s\n", strings.Join(fieldsToCompare, ", "))
 	}
 
 	// Run Analysis and collect discrepancy records
@@ -120,8 +120,8 @@ func loadConfig(configPath string) (Config, error) {
 }
 
 // resolveFieldsToCompare returns header names to compare, optionally filtered by configured fields
-func resolveFieldsToCompare(headers []string, confirmFields []string) ([]string, error) {
-	if len(confirmFields) == 0 {
+func resolveFieldsToCompare(headers []string, compareFields []string) ([]string, error) {
+	if len(compareFields) == 0 {
 		return headers, nil
 	}
 
@@ -130,9 +130,9 @@ func resolveFieldsToCompare(headers []string, confirmFields []string) ([]string,
 		headerMap[strings.ToLower(strings.TrimSpace(h))] = h
 	}
 
-	fieldsToCompare := make([]string, 0, len(confirmFields))
-	seen := make(map[string]struct{}, len(confirmFields))
-	for _, field := range confirmFields {
+	fieldsToCompare := make([]string, 0, len(compareFields))
+	seen := make(map[string]struct{}, len(compareFields))
+	for _, field := range compareFields {
 		normalized := strings.ToLower(strings.TrimSpace(field))
 		header, ok := headerMap[normalized]
 		if !ok {

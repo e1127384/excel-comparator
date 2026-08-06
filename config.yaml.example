@@ -7,4 +7,4 @@ outputFile: comparison_report.xlsx
 caseSensitive: false
 strictDate: false
 normalizeList: true
-confirmFields: []
+compareFields: []

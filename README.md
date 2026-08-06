@@ -16,7 +16,7 @@ It handles missing records, field-by-field discrepancies, flexible date normaliz
 * **Date Normalization (`strictDate`)**: Automatically parses and equates general/text date formats like `06 Aug 2025` and `10-Mar-2027`, while ignoring time components.
 * **List Separator Normalization (`normalizeList`)**: Treats comma-separated and semicolon-separated items (e.g., `a, b` vs `a; b`) identically.
 * **Case Sensitivity (`caseSensitive`)**: Configures whether string comparisons ignore letter casing.
-* **Field Selection (`confirmFields`)**: Lets you compare only a specific list of fields.
+* **Field Selection (`compareFields`)**: Lets you compare only a specific list of fields.
 * **Excel Export**: Writes a clean summary report containing columns: `CaseID`, `Field`, `Sheet1 Value`, `Sheet2 Value`, and `Status`.
 
 ---
@@ -81,7 +81,7 @@ The CLI now reads parameters from a YAML config file.
 | `caseSensitive` | `false` | Enable or disable case-sensitive comparison. |
 | `strictDate` | `false` | Enable or disable strict raw string date comparison. |
 | `normalizeList` | `true` | Treat comma and semicolon lists as equal. |
-| `confirmFields` | `[]` | Optional list of field names to compare. Empty means compare all headers. |
+| `compareFields` | `[]` | Optional list of field names to compare. Empty means compare all headers. |
 
 Example `config.yaml`:
 
@@ -95,7 +95,7 @@ outputFile: comparison_report.xlsx
 caseSensitive: false
 strictDate: false
 normalizeList: true
-confirmFields:
+compareFields:
   - caseid
   - status
   - start_date
