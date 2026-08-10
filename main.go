@@ -267,12 +267,15 @@ func loadGroupMappingRules(filePath string, fieldGroups []FieldGroup) (GroupMapp
 		return nil, nil
 	}
 
-	// Build a lookup: groupName -> fieldCount for quick validation
+	// Build a lookup: lowercase(groupName) -> fieldCount / fieldNames / canonical name
 	groupFieldCount := make(map[string]int, len(fieldGroups))
 	groupFieldNames := make(map[string][]string, len(fieldGroups))
+	groupCanonicalName := make(map[string]string, len(fieldGroups))
 	for _, g := range fieldGroups {
-		groupFieldCount[strings.ToLower(g.Name)] = len(g.Fields)
-		groupFieldNames[strings.ToLower(g.Name)] = g.Fields
+		key := strings.ToLower(g.Name)
+		groupFieldCount[key] = len(g.Fields)
+		groupFieldNames[key] = g.Fields
+		groupCanonicalName[key] = g.Name
 	}
 
 	rules := make(GroupMappingRule)
@@ -282,8 +285,7 @@ func loadGroupMappingRules(filePath string, fieldGroups []FieldGroup) (GroupMapp
 		if len(row) == 0 || strings.TrimSpace(row[0]) == "" {
 			continue
 		}
-		groupName := strings.TrimSpace(row[0])
-		groupKey := strings.ToLower(groupName)
+		groupKey := strings.ToLower(strings.TrimSpace(row[0]))
 
 		n, ok := groupFieldCount[groupKey]
 		if !ok {
@@ -296,6 +298,7 @@ func loadGroupMappingRules(filePath string, fieldGroups []FieldGroup) (GroupMapp
 		}
 
 		fields := groupFieldNames[groupKey]
+		canonicalName := groupCanonicalName[groupKey]
 
 		// Build internal key from old-side values
 		oldVals := make([]string, n)
@@ -310,10 +313,10 @@ func loadGroupMappingRules(filePath string, fieldGroups []FieldGroup) (GroupMapp
 			newVals[fields[j]] = strings.TrimSpace(row[1+n+j])
 		}
 
-		if rules[groupName] == nil {
-			rules[groupName] = make(map[string]map[string]string)
+		if rules[canonicalName] == nil {
+			rules[canonicalName] = make(map[string]map[string]string)
 		}
-		rules[groupName][internalKey] = newVals
+		rules[canonicalName][internalKey] = newVals
 	}
 
 	return rules, nil
