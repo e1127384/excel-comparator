@@ -12,18 +12,25 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// FieldGroup defines a named group of fields to compare as a logical unit
+type FieldGroup struct {
+	Name   string   `yaml:"name"`
+	Fields []string `yaml:"fields"`
+}
+
 // Config holds CLI configuration flags
 type Config struct {
-	File1         string   `yaml:"file1"`
-	File2         string   `yaml:"file2"`
-	Sheet1        string   `yaml:"sheet1"`
-	Sheet2        string   `yaml:"sheet2"`
-	MappingFile   string   `yaml:"mappingFile"`
-	OutputFile    string   `yaml:"outputFile"`
-	CaseSensitive bool     `yaml:"caseSensitive"`
-	StrictDate    bool     `yaml:"strictDate"`
-	NormalizeList bool     `yaml:"normalizeList"`
-	CompareFields []string `yaml:"compareFields"`
+	File1         string       `yaml:"file1"`
+	File2         string       `yaml:"file2"`
+	Sheet1        string       `yaml:"sheet1"`
+	Sheet2        string       `yaml:"sheet2"`
+	MappingFile   string       `yaml:"mappingFile"`
+	OutputFile    string       `yaml:"outputFile"`
+	CaseSensitive bool         `yaml:"caseSensitive"`
+	StrictDate    bool         `yaml:"strictDate"`
+	NormalizeList bool         `yaml:"normalizeList"`
+	CompareFields []string     `yaml:"compareFields"`
+	FieldGroups   []FieldGroup `yaml:"fieldGroups"`
 }
 
 // DiffRecord represents a single discrepancy or missing case for the output excel
@@ -78,7 +85,7 @@ func main() {
 		log.Fatalf("Failed to read File 2: %v", err)
 	}
 
-	fieldsToCompare, err := resolveFieldsToCompare(headers1, cfg.CompareFields)
+	fieldsToCompare, resolvedGroups, err := resolveFieldsToCompare(headers1, cfg.CompareFields, cfg.FieldGroups)
 	if err != nil {
 		log.Fatalf("Failed to resolve compare fields: %v", err)
 	}
@@ -86,9 +93,14 @@ func main() {
 	if len(cfg.CompareFields) > 0 {
 		fmt.Printf("  Compare Fields: %s\n", strings.Join(fieldsToCompare, ", "))
 	}
+	if len(resolvedGroups) > 0 {
+		for _, g := range resolvedGroups {
+			fmt.Printf("  Field Group [%s]: %s\n", g.Name, strings.Join(g.Fields, ", "))
+		}
+	}
 
 	// Run Analysis and collect discrepancy records
-	records := compareData(fieldsToCompare, data1, data2, mappingRules, cfg)
+	records := compareData(fieldsToCompare, resolvedGroups, data1, data2, mappingRules, cfg)
 
 	// Export results to Excel
 	if err := writeReportToExcel(cfg.OutputFile, records); err != nil {
@@ -119,15 +131,40 @@ func loadConfig(configPath string) (Config, error) {
 	return cfg, nil
 }
 
-// resolveFieldsToCompare returns header names to compare, optionally filtered by configured fields
-func resolveFieldsToCompare(headers []string, compareFields []string) ([]string, error) {
-	if len(compareFields) == 0 {
-		return headers, nil
-	}
-
+// resolveFieldsToCompare returns header names to compare, optionally filtered by configured fields.
+// Fields covered by a fieldGroup are excluded from the standalone fieldsToCompare list to avoid double-reporting.
+func resolveFieldsToCompare(headers []string, compareFields []string, fieldGroups []FieldGroup) ([]string, []FieldGroup, error) {
 	headerMap := make(map[string]string, len(headers))
 	for _, h := range headers {
 		headerMap[strings.ToLower(strings.TrimSpace(h))] = h
+	}
+
+	// Resolve each group's field names to canonical header names
+	groupedFields := make(map[string]struct{})
+	resolvedGroups := make([]FieldGroup, 0, len(fieldGroups))
+	for _, g := range fieldGroups {
+		resolved := make([]string, 0, len(g.Fields))
+		for _, f := range g.Fields {
+			norm := strings.ToLower(strings.TrimSpace(f))
+			h, ok := headerMap[norm]
+			if !ok {
+				return nil, nil, fmt.Errorf("field group %q: field %q not found in Sheet 1 headers", g.Name, f)
+			}
+			resolved = append(resolved, h)
+			groupedFields[h] = struct{}{}
+		}
+		resolvedGroups = append(resolvedGroups, FieldGroup{Name: g.Name, Fields: resolved})
+	}
+
+	// Resolve standalone compare fields (all headers if none specified), excluding grouped fields
+	if len(compareFields) == 0 {
+		fieldsToCompare := make([]string, 0, len(headers))
+		for _, h := range headers {
+			if _, inGroup := groupedFields[h]; !inGroup {
+				fieldsToCompare = append(fieldsToCompare, h)
+			}
+		}
+		return fieldsToCompare, resolvedGroups, nil
 	}
 
 	fieldsToCompare := make([]string, 0, len(compareFields))
@@ -136,16 +173,18 @@ func resolveFieldsToCompare(headers []string, compareFields []string) ([]string,
 		normalized := strings.ToLower(strings.TrimSpace(field))
 		header, ok := headerMap[normalized]
 		if !ok {
-			return nil, fmt.Errorf("field %q not found in Sheet 1 headers", field)
+			return nil, nil, fmt.Errorf("field %q not found in Sheet 1 headers", field)
 		}
 		if _, exists := seen[header]; exists {
 			continue
 		}
 		seen[header] = struct{}{}
-		fieldsToCompare = append(fieldsToCompare, header)
+		if _, inGroup := groupedFields[header]; !inGroup {
+			fieldsToCompare = append(fieldsToCompare, header)
+		}
 	}
 
-	return fieldsToCompare, nil
+	return fieldsToCompare, resolvedGroups, nil
 }
 
 // loadMappingRules reads the migration Excel file containing FieldName, OldValue, NewValue
@@ -229,7 +268,7 @@ func loadExcelData(filePath, sheetName string) ([]string, map[string]map[string]
 }
 
 // compareData performs the differential analysis and returns collected records
-func compareData(fieldsToCompare []string, data1, data2 map[string]map[string]string, mappingRules MappingRule, cfg Config) []DiffRecord {
+func compareData(fieldsToCompare []string, fieldGroups []FieldGroup, data1, data2 map[string]map[string]string, mappingRules MappingRule, cfg Config) []DiffRecord {
 	var records []DiffRecord
 
 	fmt.Println("================== ANALYSIS REPORT ==================")
@@ -267,6 +306,39 @@ func compareData(fieldsToCompare []string, data1, data2 map[string]map[string]st
 		commonCount++
 		caseHasDiff := false
 
+		// 2a. Compare field groups as a unit
+		for _, group := range fieldGroups {
+			val1Parts := make([]string, 0, len(group.Fields))
+			val2Parts := make([]string, 0, len(group.Fields))
+			groupMismatch := false
+
+			for _, header := range group.Fields {
+				v1 := row1[header]
+				v2 := row2[header]
+				mapped1 := applyMapping(header, v1, mappingRules)
+				val1Parts = append(val1Parts, fmt.Sprintf("%s=%s", header, v1))
+				val2Parts = append(val2Parts, fmt.Sprintf("%s=%s", header, v2))
+				if !compareValues(mapped1, v2, header, cfg) {
+					groupMismatch = true
+				}
+			}
+
+			if groupMismatch {
+				caseHasDiff = true
+				sheet1Val := strings.Join(val1Parts, ", ")
+				sheet2Val := strings.Join(val2Parts, ", ")
+				records = append(records, DiffRecord{
+					CaseID: caseID,
+					Field:  group.Name,
+					Val1:   sheet1Val,
+					Val2:   sheet2Val,
+					Status: "Mismatch",
+				})
+				fmt.Printf("    * Group [%s] mismatch for Case ID %s:\n      Sheet1: %s\n      Sheet2: %s\n", group.Name, caseID, sheet1Val, sheet2Val)
+			}
+		}
+
+		// 2b. Compare standalone fields individually
 		for _, header := range fieldsToCompare {
 			val1 := row1[header]
 			val2 := row2[header]

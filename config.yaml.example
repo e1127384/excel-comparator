@@ -8,3 +8,10 @@ caseSensitive: false
 strictDate: false
 normalizeList: true
 compareFields: []
+fieldGroups: []
+# fieldGroups example:
+# fieldGroups:
+#   - name: "Geography"
+#     fields: [country, sub-region, region]
+#   - name: "Classification"
+#     fields: [category, sub-category]
