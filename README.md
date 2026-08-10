@@ -1,6 +1,6 @@
 # Excel Row Comparator CLI in Go
 
-A robust, high-performance command-line interface (CLI) application written in Go designed to compare two Excel sheets row-by-row based on a primary key (`caseid` in the first column).
+A robust, high-performance command-line interface (CLI) application written in Go designed to compare two Excel sheets row-by-row based on a record key (default: first column, e.g. `caseid`).
 
 It handles missing records, field-by-field discrepancies, flexible date normalization (supporting text/general formats like `06 Aug 2025` and `10-Mar-2027` without time components), list separator normalization (e.g., `,` vs `;`), data migration mapping transformations, and case-sensitivity toggles, exporting all findings cleanly into an output Excel report.
 
@@ -8,7 +8,7 @@ It handles missing records, field-by-field discrepancies, flexible date normaliz
 
 ## Features
 
-* **Primary Key Mapping**: Uses the first column as the unique `CaseID`.
+* **Configurable Record Key**: Uses the first column by default, or a composite key via `keyFields`.
 * **Missing Record Analysis**: Identifies cases present in Sheet 1 but completely missing in Sheet 2.
 * **Field-by-Field Mismatch Detection**: Compares every common field column-by-column.
 * **Migration Mapping Rules (`mappingFile`)**: Translates old field values to new expected migration values using an external mapping spreadsheet (`FieldName`, `OldValue`, `NewValue`).
@@ -75,6 +75,7 @@ The CLI now reads parameters from a YAML config file.
 | `file2` | `""` | **(Required)** Path to the second Excel file. |
 | `sheet1` | `"Sheet1"` | Sheet name for File 1. |
 | `sheet2` | `"Sheet1"` | Sheet name for File 2. |
+| `keyFields` | `[]` | Optional list of key fields used to uniquely match rows across sheets. Empty means use the first column only. |
 | `mappingFile` | `""` | Path to migration mapping Excel file (`FieldName`, `OldValue`, `NewValue`). |
 | `outputFile` | `"comparison_report.xlsx"` | File path for generated report. |
 | `caseSensitive` | `false` | Enable or disable case-sensitive comparison. |
@@ -90,6 +91,9 @@ file1: file1.xlsx
 file2: file2.xlsx
 sheet1: SheetA
 sheet2: SheetB
+keyFields:
+  - caseid
+  - country
 mappingFile: migration_rules.xlsx
 outputFile: comparison_report.xlsx
 caseSensitive: false
@@ -206,7 +210,7 @@ normalizeList: false
 
 The generated Excel workbook will contain a single worksheet titled **`Comparison Report`** with:
 
-* **`CaseID`**: The unique identifier extracted from the first column of your rows.
+* **`CaseID`**: The row key used for matching records (single key value or composite `field=value` pairs).
 * **`Field`**: The column header name where a mismatch was detected (or `[All Fields]` if the case ID itself is entirely missing from Sheet 2).
 * **`Sheet1 Value`**: The raw or mapped value recorded in the first file.
 * **`Sheet2 Value`**: The raw value recorded in the second file.
