@@ -1,4 +1,4 @@
-module github.com/example/excel-comparator
+module github.com/e1127384/excel-comparator
 
 go 1.25.0
 
