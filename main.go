@@ -46,6 +46,11 @@ type FieldSummary struct {
 // MappingRule stores value translations: FieldName -> {OldVal -> NewVal}
 type MappingRule map[string]map[string]string
 
+const (
+	ragGreenThreshold = 0.05
+	ragAmberThreshold = 0.20
+)
+
 func main() {
 	// Define CLI flag for config file path
 	configPath := flag.String("config", "config.yaml", "Path to configuration YAML file")
@@ -545,14 +550,15 @@ func writeReportToExcel(outputPath string, records []DiffRecord, summaries []Fie
 		}
 	}
 
-	summaryTitleRow := len(records) + 4
+	lastDetailRow := len(records) + 1 // +1 accounts for the report header row on row 1.
+	summaryTitleRow := lastDetailRow + 3
 	f.SetCellValue(sheetName, fmt.Sprintf("A%d", summaryTitleRow), "Field-wise Analysis")
 	if err := f.SetCellStyle(sheetName, fmt.Sprintf("A%d", summaryTitleRow), fmt.Sprintf("A%d", summaryTitleRow), headerStyle); err != nil {
 		return err
 	}
 
 	summaryHeaderRow := summaryTitleRow + 1
-	summaryHeaders := []string{"Field", "Populated in Sheet1", "Compared in Both Sheets", "Mismatch Count", "Mismatch %", "RAG Status"}
+	summaryHeaders := []string{"Field", "Populated in Sheet1", "Populated Rows with Case in Sheet2", "Mismatch Count", "Mismatch %", "RAG Status"}
 	for colIdx, header := range summaryHeaders {
 		cell, _ := excelize.CoordinatesToCellName(colIdx+1, summaryHeaderRow)
 		f.SetCellValue(sheetName, cell, header)
@@ -581,8 +587,12 @@ func writeReportToExcel(outputPath string, records []DiffRecord, summaries []Fie
 		}
 	}
 
-	_ = f.SetColWidth(sheetName, "A", "A", 24)
-	_ = f.SetColWidth(sheetName, "B", "F", 22)
+	if err := f.SetColWidth(sheetName, "A", "A", 24); err != nil {
+		return err
+	}
+	if err := f.SetColWidth(sheetName, "B", "F", 22); err != nil {
+		return err
+	}
 
 	if err := f.SaveAs(outputPath); err != nil {
 		return err
@@ -593,14 +603,14 @@ func writeReportToExcel(outputPath string, records []DiffRecord, summaries []Fie
 
 func determineRAGStatus(comparedCount, mismatchCount, redStyle, amberStyle, greenStyle int) (string, int) {
 	if comparedCount == 0 {
-		return "Amber", amberStyle
+		return "Amber (No comparable rows)", amberStyle
 	}
 
 	mismatchRate := float64(mismatchCount) / float64(comparedCount)
-	if mismatchRate <= 0.05 {
+	if mismatchRate <= ragGreenThreshold {
 		return "Green", greenStyle
 	}
-	if mismatchRate <= 0.20 {
+	if mismatchRate <= ragAmberThreshold {
 		return "Amber", amberStyle
 	}
 	return "Red", redStyle

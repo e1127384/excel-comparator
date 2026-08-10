@@ -164,6 +164,7 @@ The generated Excel workbook will contain a single worksheet titled **`Compariso
 
 It also appends a **Field-wise Analysis** section that shows:
 * Populated count in Sheet 1 for each compared field
-* Comparable count across both sheets
+* Count of populated Sheet 1 rows whose Case ID exists in Sheet 2
 * Mismatch count and mismatch percentage
 * A **RAG status** (`Green` ≤ 5% mismatch, `Amber` ≤ 20%, `Red` > 20%) for quick field health visibility
+  * If no comparable rows exist for a field, status is shown as `Amber (No comparable rows)`
