@@ -31,7 +31,365 @@ type Config struct {
 	StrictDate    bool         `yaml:"strictDate"`
 	NormalizeList bool         `yaml:"normalizeList"`
 	CompareFields []string     `yaml:"compareFields"`
+	CaseQualifier string       `yaml:"caseQualifier"`
 	FieldGroups   []FieldGroup `yaml:"fieldGroups"`
+}
+
+const (
+	tokWord   = "WORD"
+	tokEQ     = "EQ"
+	tokNEQ    = "NEQ"
+	tokAnd    = "AND"
+	tokOr     = "OR"
+	tokNot    = "NOT"
+	tokIn     = "IN"
+	tokLParen = "LPAREN"
+	tokRParen = "RPAREN"
+	tokComma  = "COMMA"
+	tokEOF    = "EOF"
+)
+
+type qualToken struct {
+	typ string
+	val string
+}
+
+func tokenizeQualifier(expr string) []qualToken {
+	var tokens []qualToken
+	i := 0
+	for i < len(expr) {
+		ch := expr[i]
+		if ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' {
+			i++
+			continue
+		}
+		if ch == '(' {
+			tokens = append(tokens, qualToken{tokLParen, "("})
+			i++
+			continue
+		}
+		if ch == ')' {
+			tokens = append(tokens, qualToken{tokRParen, ")"})
+			i++
+			continue
+		}
+		if ch == ',' {
+			tokens = append(tokens, qualToken{tokComma, ","})
+			i++
+			continue
+		}
+		if ch == '!' && i+1 < len(expr) && expr[i+1] == '=' {
+			tokens = append(tokens, qualToken{tokNEQ, "!="})
+			i += 2
+			continue
+		}
+		if ch == '=' {
+			tokens = append(tokens, qualToken{tokEQ, "="})
+			i++
+			continue
+		}
+		if ch == '"' || ch == '\'' {
+			quote := ch
+			i++
+			start := i
+			for i < len(expr) && expr[i] != quote {
+				i++
+			}
+			tokens = append(tokens, qualToken{tokWord, expr[start:i]})
+			if i < len(expr) {
+				i++
+			}
+			continue
+		}
+		start := i
+		for i < len(expr) && expr[i] != ' ' && expr[i] != '\t' && expr[i] != '\n' && expr[i] != '\r' &&
+			expr[i] != '(' && expr[i] != ')' && expr[i] != ',' && expr[i] != '=' && expr[i] != '!' {
+			i++
+		}
+		word := expr[start:i]
+		switch strings.ToUpper(word) {
+		case "AND":
+			tokens = append(tokens, qualToken{tokAnd, word})
+		case "OR":
+			tokens = append(tokens, qualToken{tokOr, word})
+		case "NOT":
+			tokens = append(tokens, qualToken{tokNot, word})
+		case "IN":
+			tokens = append(tokens, qualToken{tokIn, word})
+		default:
+			tokens = append(tokens, qualToken{tokWord, word})
+		}
+	}
+	tokens = append(tokens, qualToken{tokEOF, ""})
+	return tokens
+}
+
+type QualExpr interface {
+	Evaluate(row map[string]string, caseSensitive bool) bool
+}
+
+type QualCondExpr struct {
+	Field  string
+	Op     string
+	Value  string
+	Values []string
+}
+
+type QualAndExpr struct{ Left, Right QualExpr }
+type QualOrExpr struct{ Left, Right QualExpr }
+
+func (e *QualCondExpr) Evaluate(row map[string]string, caseSensitive bool) bool {
+	fieldVal, ok := row[e.Field]
+	if !ok {
+		for k, v := range row {
+			if strings.EqualFold(k, e.Field) {
+				fieldVal = v
+				ok = true
+				break
+			}
+		}
+	}
+	if !ok {
+		return false
+	}
+
+	eq := func(a, b string) bool {
+		if caseSensitive {
+			return a == b
+		}
+		return strings.EqualFold(a, b)
+	}
+
+	switch e.Op {
+	case "=":
+		return eq(fieldVal, e.Value)
+	case "!=":
+		return !eq(fieldVal, e.Value)
+	case "IN":
+		for _, v := range e.Values {
+			if eq(fieldVal, v) {
+				return true
+			}
+		}
+		return false
+	case "NOT IN":
+		for _, v := range e.Values {
+			if eq(fieldVal, v) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func (e *QualAndExpr) Evaluate(row map[string]string, caseSensitive bool) bool {
+	return e.Left.Evaluate(row, caseSensitive) && e.Right.Evaluate(row, caseSensitive)
+}
+
+func (e *QualOrExpr) Evaluate(row map[string]string, caseSensitive bool) bool {
+	return e.Left.Evaluate(row, caseSensitive) || e.Right.Evaluate(row, caseSensitive)
+}
+
+type qualParser struct {
+	tokens []qualToken
+	pos    int
+}
+
+func (p *qualParser) peek() qualToken {
+	if p.pos < len(p.tokens) {
+		return p.tokens[p.pos]
+	}
+	return qualToken{tokEOF, ""}
+}
+
+func (p *qualParser) consume() qualToken {
+	t := p.peek()
+	p.pos++
+	return t
+}
+
+func parseQualifierExpr(expr string) (QualExpr, error) {
+	tokens := tokenizeQualifier(expr)
+	p := &qualParser{tokens: tokens}
+	e, err := p.parseOr()
+	if err != nil {
+		return nil, err
+	}
+	if p.peek().typ != tokEOF {
+		return nil, fmt.Errorf("unexpected token %q in qualifier", p.peek().val)
+	}
+	return e, nil
+}
+
+func (p *qualParser) parseOr() (QualExpr, error) {
+	left, err := p.parseAnd()
+	if err != nil {
+		return nil, err
+	}
+	for p.peek().typ == tokOr {
+		p.consume()
+		right, err := p.parseAnd()
+		if err != nil {
+			return nil, err
+		}
+		left = &QualOrExpr{Left: left, Right: right}
+	}
+	return left, nil
+}
+
+func (p *qualParser) parseAnd() (QualExpr, error) {
+	left, err := p.parsePrimary()
+	if err != nil {
+		return nil, err
+	}
+	for p.peek().typ == tokAnd {
+		p.consume()
+		right, err := p.parsePrimary()
+		if err != nil {
+			return nil, err
+		}
+		left = &QualAndExpr{Left: left, Right: right}
+	}
+	return left, nil
+}
+
+func (p *qualParser) parsePrimary() (QualExpr, error) {
+	if p.peek().typ == tokLParen {
+		p.consume()
+		expr, err := p.parseOr()
+		if err != nil {
+			return nil, err
+		}
+		if p.peek().typ != tokRParen {
+			return nil, fmt.Errorf("expected ')' in qualifier, got %q", p.peek().val)
+		}
+		p.consume()
+		return expr, nil
+	}
+	return p.parseCondition()
+}
+
+func (p *qualParser) parseCondition() (QualExpr, error) {
+	var fieldParts []string
+	for {
+		t := p.peek()
+		if t.typ != tokWord {
+			break
+		}
+		p.consume()
+		fieldParts = append(fieldParts, t.val)
+		next := p.peek()
+		if next.typ == tokEQ || next.typ == tokNEQ || next.typ == tokIn || next.typ == tokNot {
+			break
+		}
+	}
+	if len(fieldParts) == 0 {
+		return nil, fmt.Errorf("expected field name in qualifier, got %q", p.peek().val)
+	}
+	field := strings.Join(fieldParts, " ")
+
+	switch p.peek().typ {
+	case tokEQ:
+		p.consume()
+		val, err := p.parseValue()
+		if err != nil {
+			return nil, err
+		}
+		return &QualCondExpr{Field: field, Op: "=", Value: val}, nil
+	case tokNEQ:
+		p.consume()
+		val, err := p.parseValue()
+		if err != nil {
+			return nil, err
+		}
+		return &QualCondExpr{Field: field, Op: "!=", Value: val}, nil
+	case tokIn:
+		p.consume()
+		vals, err := p.parseList()
+		if err != nil {
+			return nil, err
+		}
+		return &QualCondExpr{Field: field, Op: "IN", Values: vals}, nil
+	case tokNot:
+		p.consume()
+		if p.peek().typ != tokIn {
+			return nil, fmt.Errorf("expected IN after NOT in qualifier, got %q", p.peek().val)
+		}
+		p.consume()
+		vals, err := p.parseList()
+		if err != nil {
+			return nil, err
+		}
+		return &QualCondExpr{Field: field, Op: "NOT IN", Values: vals}, nil
+	default:
+		return nil, fmt.Errorf("expected operator after field %q in qualifier, got %q", field, p.peek().val)
+	}
+}
+
+func (p *qualParser) parseValue() (string, error) {
+	var parts []string
+	for {
+		t := p.peek()
+		if t.typ != tokWord {
+			break
+		}
+		p.consume()
+		parts = append(parts, t.val)
+		next := p.peek()
+		if next.typ == tokAnd || next.typ == tokOr || next.typ == tokEOF || next.typ == tokRParen {
+			break
+		}
+	}
+	if len(parts) == 0 {
+		return "", fmt.Errorf("expected value in qualifier, got %q", p.peek().val)
+	}
+	return strings.Join(parts, " "), nil
+}
+
+func (p *qualParser) parseList() ([]string, error) {
+	if p.peek().typ != tokLParen {
+		return nil, fmt.Errorf("expected '(' for IN list in qualifier, got %q", p.peek().val)
+	}
+	p.consume()
+	var vals []string
+	for {
+		val, err := p.parseListValue()
+		if err != nil {
+			return nil, err
+		}
+		vals = append(vals, val)
+		if p.peek().typ == tokComma {
+			p.consume()
+			continue
+		}
+		break
+	}
+	if p.peek().typ != tokRParen {
+		return nil, fmt.Errorf("expected ')' to close IN list in qualifier, got %q", p.peek().val)
+	}
+	p.consume()
+	return vals, nil
+}
+
+func (p *qualParser) parseListValue() (string, error) {
+	var parts []string
+	for {
+		t := p.peek()
+		if t.typ != tokWord {
+			break
+		}
+		p.consume()
+		parts = append(parts, t.val)
+		next := p.peek()
+		if next.typ == tokComma || next.typ == tokRParen || next.typ == tokEOF {
+			break
+		}
+	}
+	if len(parts) == 0 {
+		return "", fmt.Errorf("expected value in IN list qualifier, got %q", p.peek().val)
+	}
+	return strings.Join(parts, " "), nil
 }
 
 // DiffRecord represents a single discrepancy or missing case for the output excel
@@ -78,9 +436,20 @@ func main() {
 		log.Fatal("Error: file1 and file2 are required in config.yaml")
 	}
 
+	var qualExpr QualExpr
+	if cfg.CaseQualifier != "" {
+		qualExpr, err = parseQualifierExpr(cfg.CaseQualifier)
+		if err != nil {
+			log.Fatalf("Invalid caseQualifier: %v", err)
+		}
+	}
+
 	fmt.Printf("Comparing:\n  File 1: %s [%s]\n  File 2: %s [%s]\n", cfg.File1, cfg.Sheet1, cfg.File2, cfg.Sheet2)
 	if cfg.MappingFile != "" {
 		fmt.Printf("  Mapping File: %s\n", cfg.MappingFile)
+	}
+	if cfg.CaseQualifier != "" {
+		fmt.Printf("  Case Qualifier: %s\n", cfg.CaseQualifier)
 	}
 	fmt.Println()
 
@@ -126,7 +495,7 @@ func main() {
 	}
 
 	// Run Analysis and collect discrepancy records
-	records, fieldSummaries := compareData(fieldsToCompare, resolvedGroups, data1, data2, keyDisplay1, mappingRules, groupMappingRules, cfg)
+	records, fieldSummaries := compareData(fieldsToCompare, resolvedGroups, data1, data2, keyDisplay1, mappingRules, groupMappingRules, cfg, qualExpr)
 
 	// Export results to Excel
 	if err := writeReportToExcel(cfg.OutputFile, records, fieldSummaries); err != nil {
@@ -416,9 +785,20 @@ func loadExcelData(filePath, sheetName string, requestedKeyFields []string) ([]s
 }
 
 // compareData performs the differential analysis and returns collected records
-func compareData(fieldsToCompare []string, fieldGroups []FieldGroup, data1, data2 map[string]map[string]string, keyDisplay1 map[string]string, mappingRules MappingRule, groupMappingRules GroupMappingRule, cfg Config) ([]DiffRecord, []FieldSummary) {
+func compareData(fieldsToCompare []string, fieldGroups []FieldGroup, data1, data2 map[string]map[string]string, keyDisplay1 map[string]string, mappingRules MappingRule, groupMappingRules GroupMappingRule, cfg Config, qualExpr QualExpr) ([]DiffRecord, []FieldSummary) {
 	var records []DiffRecord
 	fieldStats := make(map[string]FieldSummary, len(fieldsToCompare))
+
+	filteredData1 := data1
+	if qualExpr != nil {
+		filteredData1 = make(map[string]map[string]string)
+		for caseKey, row := range data1 {
+			if qualExpr.Evaluate(row, cfg.CaseSensitive) {
+				filteredData1[caseKey] = row
+			}
+		}
+		fmt.Printf("Case Qualifier applied: %d of %d Sheet 1 records selected.\n\n", len(filteredData1), len(data1))
+	}
 
 	fmt.Println("================== ANALYSIS REPORT ==================")
 
@@ -426,7 +806,7 @@ func compareData(fieldsToCompare []string, fieldGroups []FieldGroup, data1, data
 		fieldStats[header] = FieldSummary{Field: header}
 	}
 
-	for _, row1 := range data1 {
+	for _, row1 := range filteredData1 {
 		for _, header := range fieldsToCompare {
 			if strings.TrimSpace(row1[header]) == "" {
 				continue
@@ -440,7 +820,7 @@ func compareData(fieldsToCompare []string, fieldGroups []FieldGroup, data1, data
 	// 1. Check cases in File 1 but NOT in File 2
 	fmt.Println("\n--- 1. Cases in Sheet 1 Missing from Sheet 2 ---")
 	missingCount := 0
-	for caseKey := range data1 {
+	for caseKey := range filteredData1 {
 		if _, exists := data2[caseKey]; !exists {
 			displayKey := keyDisplay1[caseKey]
 			fmt.Printf("  [Missing] Key: %s\n", displayKey)
@@ -463,7 +843,7 @@ func compareData(fieldsToCompare []string, fieldGroups []FieldGroup, data1, data
 	commonCount := 0
 	diffCount := 0
 
-	for caseKey, row1 := range data1 {
+	for caseKey, row1 := range filteredData1 {
 		row2, exists := data2[caseKey]
 		if !exists {
 			continue
@@ -563,7 +943,10 @@ func compareData(fieldsToCompare []string, fieldGroups []FieldGroup, data1, data
 
 	fmt.Println("\n================== SUMMARY ==================")
 	fmt.Printf("Total Cases in Sheet 1: %d\n", len(data1))
-	fmt.Printf("Total Cases in Sheet 2: %d\n", len(data2))
+	if qualExpr != nil {
+		fmt.Printf("Cases After Qualifier:    %d\n", len(filteredData1))
+	}
+	fmt.Printf("Total Cases in Sheet 2:   %d\n", len(data2))
 	fmt.Printf("Cases Missing in Sheet 2: %d\n", missingCount)
 	fmt.Printf("Common Cases Evaluated:   %d\n", commonCount)
 	fmt.Printf("Cases with Mismatches:    %d\n", diffCount)
