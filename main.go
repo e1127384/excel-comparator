@@ -24,6 +24,7 @@ type Config struct {
 	File2         string       `yaml:"file2"`
 	Sheet1        string       `yaml:"sheet1"`
 	Sheet2        string       `yaml:"sheet2"`
+	KeyFields     []string     `yaml:"keyFields"`
 	MappingFile   string       `yaml:"mappingFile"`
 	OutputFile    string       `yaml:"outputFile"`
 	CaseSensitive bool         `yaml:"caseSensitive"`
@@ -98,15 +99,17 @@ func main() {
 	}
 
 	// Load Data from Excel sheets
-	headers1, data1, err := loadExcelData(cfg.File1, cfg.Sheet1)
+	headers1, data1, keyDisplay1, resolvedKeyFields, err := loadExcelData(cfg.File1, cfg.Sheet1, cfg.KeyFields)
 	if err != nil {
 		log.Fatalf("Failed to read File 1: %v", err)
 	}
 
-	_, data2, err := loadExcelData(cfg.File2, cfg.Sheet2)
+	_, data2, _, _, err := loadExcelData(cfg.File2, cfg.Sheet2, cfg.KeyFields)
 	if err != nil {
 		log.Fatalf("Failed to read File 2: %v", err)
 	}
+
+	fmt.Printf("  Key Fields: %s\n", strings.Join(resolvedKeyFields, ", "))
 
 	fieldsToCompare, resolvedGroups, err := resolveFieldsToCompare(headers1, cfg.CompareFields, cfg.FieldGroups)
 	if err != nil {
@@ -123,7 +126,7 @@ func main() {
 	}
 
 	// Run Analysis and collect discrepancy records
-	records, fieldSummaries := compareData(fieldsToCompare, resolvedGroups, data1, data2, mappingRules, groupMappingRules, cfg)
+	records, fieldSummaries := compareData(fieldsToCompare, resolvedGroups, data1, data2, keyDisplay1, mappingRules, groupMappingRules, cfg)
 
 	// Export results to Excel
 	if err := writeReportToExcel(cfg.OutputFile, records, fieldSummaries); err != nil {
@@ -362,32 +365,32 @@ func applyGroupMapping(groupName string, row map[string]string, fields []string,
 	return mapped
 }
 
-func loadExcelData(filePath, sheetName string) ([]string, map[string]map[string]string, error) {
+func loadExcelData(filePath, sheetName string, requestedKeyFields []string) ([]string, map[string]map[string]string, map[string]string, []string, error) {
 	f, err := excelize.OpenFile(filePath)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	defer f.Close()
 
 	rows, err := f.GetRows(sheetName)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
 	if len(rows) == 0 {
-		return nil, nil, fmt.Errorf("sheet %s is empty", sheetName)
+		return nil, nil, nil, nil, fmt.Errorf("sheet %s is empty", sheetName)
 	}
 
 	headers := rows[0]
+	keyFields, err := resolveKeyFields(headers, requestedKeyFields)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
 	data := make(map[string]map[string]string)
+	keyDisplay := make(map[string]string)
 
 	for i := 1; i < len(rows); i++ {
 		row := rows[i]
-		if len(row) == 0 || row[0] == "" {
-			continue // Skip blank rows
-		}
-
-		caseID := strings.TrimSpace(row[0])
 		rowData := make(map[string]string)
 
 		for j, header := range headers {
@@ -397,14 +400,23 @@ func loadExcelData(filePath, sheetName string) ([]string, map[string]map[string]
 			}
 			rowData[header] = val
 		}
-		data[caseID] = rowData
+
+		internalKey, isEmpty := buildInternalKey(rowData, keyFields)
+		if len(row) == 0 || isEmpty {
+			continue // Skip blank rows or rows without key values
+		}
+		if _, exists := data[internalKey]; exists {
+			return nil, nil, nil, nil, fmt.Errorf("duplicate key found in %s/%s: %s", filePath, sheetName, buildDisplayKey(rowData, keyFields))
+		}
+		data[internalKey] = rowData
+		keyDisplay[internalKey] = buildDisplayKey(rowData, keyFields)
 	}
 
-	return headers, data, nil
+	return headers, data, keyDisplay, keyFields, nil
 }
 
 // compareData performs the differential analysis and returns collected records
-func compareData(fieldsToCompare []string, fieldGroups []FieldGroup, data1, data2 map[string]map[string]string, mappingRules MappingRule, groupMappingRules GroupMappingRule, cfg Config) ([]DiffRecord, []FieldSummary) {
+func compareData(fieldsToCompare []string, fieldGroups []FieldGroup, data1, data2 map[string]map[string]string, keyDisplay1 map[string]string, mappingRules MappingRule, groupMappingRules GroupMappingRule, cfg Config) ([]DiffRecord, []FieldSummary) {
 	var records []DiffRecord
 	fieldStats := make(map[string]FieldSummary, len(fieldsToCompare))
 
@@ -428,11 +440,12 @@ func compareData(fieldsToCompare []string, fieldGroups []FieldGroup, data1, data
 	// 1. Check cases in File 1 but NOT in File 2
 	fmt.Println("\n--- 1. Cases in Sheet 1 Missing from Sheet 2 ---")
 	missingCount := 0
-	for caseID := range data1 {
-		if _, exists := data2[caseID]; !exists {
-			fmt.Printf("  [Missing] Case ID: %s\n", caseID)
+	for caseKey := range data1 {
+		if _, exists := data2[caseKey]; !exists {
+			displayKey := keyDisplay1[caseKey]
+			fmt.Printf("  [Missing] Key: %s\n", displayKey)
 			records = append(records, DiffRecord{
-				CaseID: caseID,
+				CaseID: displayKey,
 				Field:  "[All Fields]",
 				Val1:   "Present in Sheet 1",
 				Val2:   "Missing in Sheet 2",
@@ -450,13 +463,14 @@ func compareData(fieldsToCompare []string, fieldGroups []FieldGroup, data1, data
 	commonCount := 0
 	diffCount := 0
 
-	for caseID, row1 := range data1 {
-		row2, exists := data2[caseID]
+	for caseKey, row1 := range data1 {
+		row2, exists := data2[caseKey]
 		if !exists {
 			continue
 		}
 		commonCount++
 		caseHasDiff := false
+		displayKey := keyDisplay1[caseKey]
 
 		// 2a. Compare field groups as a unit
 		for _, group := range fieldGroups {
@@ -496,13 +510,13 @@ func compareData(fieldsToCompare []string, fieldGroups []FieldGroup, data1, data
 				sheet1Val := strings.Join(val1Parts, ", ")
 				sheet2Val := strings.Join(val2Parts, ", ")
 				records = append(records, DiffRecord{
-					CaseID: caseID,
+					CaseID: displayKey,
 					Field:  group.Name,
 					Val1:   sheet1Val,
 					Val2:   sheet2Val,
 					Status: "Mismatch",
 				})
-				fmt.Printf("    * Group [%s] mismatch for Case ID %s:\n      Sheet1: %s\n      Sheet2: %s\n", group.Name, caseID, sheet1Val, sheet2Val)
+				fmt.Printf("    * Group [%s] mismatch for Key %s:\n      Sheet1: %s\n      Sheet2: %s\n", group.Name, displayKey, sheet1Val, sheet2Val)
 			}
 		}
 
@@ -532,18 +546,75 @@ func compareData(fieldsToCompare []string, fieldGroups []FieldGroup, data1, data
 					reportVal1 = fmt.Sprintf("%s (mapped to %s)", val1, mappedVal1)
 				}
 				records = append(records, DiffRecord{
-					CaseID: caseID,
+					CaseID: displayKey,
 					Field:  header,
 					Val1:   reportVal1,
 					Val2:   val2,
 					Status: "Mismatch",
 				})
-				fmt.Printf("    * Field [%s] mismatch for Case ID %s: Sheet1='%s' vs Sheet2='%s'\n", header, caseID, reportVal1, val2)
+				fmt.Printf("    * Field [%s] mismatch for Key %s: Sheet1='%s' vs Sheet2='%s'\n", header, displayKey, reportVal1, val2)
 			}
 		}
 
 		if caseHasDiff {
 			diffCount++
+		}
+
+		func resolveKeyFields(headers, requestedKeyFields []string) ([]string, error) {
+			if len(headers) == 0 {
+				return nil, fmt.Errorf("missing header row")
+			}
+			if len(requestedKeyFields) == 0 {
+				return []string{headers[0]}, nil
+			}
+
+			headerMap := make(map[string]string, len(headers))
+			for _, h := range headers {
+				headerMap[strings.ToLower(strings.TrimSpace(h))] = h
+			}
+
+			resolved := make([]string, 0, len(requestedKeyFields))
+			seen := make(map[string]struct{}, len(requestedKeyFields))
+			for _, f := range requestedKeyFields {
+				norm := strings.ToLower(strings.TrimSpace(f))
+				h, ok := headerMap[norm]
+				if !ok {
+					return nil, fmt.Errorf("key field %q not found in headers", f)
+				}
+				if _, exists := seen[h]; exists {
+					continue
+				}
+				seen[h] = struct{}{}
+				resolved = append(resolved, h)
+			}
+			if len(resolved) == 0 {
+				return nil, fmt.Errorf("at least one key field is required")
+			}
+			return resolved, nil
+		}
+
+		func buildInternalKey(rowData map[string]string, keyFields []string) (string, bool) {
+			parts := make([]string, len(keyFields))
+			empty := true
+			for i, field := range keyFields {
+				v := strings.TrimSpace(rowData[field])
+				parts[i] = v
+				if v != "" {
+					empty = false
+				}
+			}
+			return strings.Join(parts, "\x00"), empty
+		}
+
+		func buildDisplayKey(rowData map[string]string, keyFields []string) string {
+			if len(keyFields) == 1 {
+				return rowData[keyFields[0]]
+			}
+			parts := make([]string, 0, len(keyFields))
+			for _, field := range keyFields {
+				parts = append(parts, fmt.Sprintf("%s=%s", field, rowData[field]))
+			}
+			return strings.Join(parts, ", ")
 		}
 	}
 
