@@ -166,4 +166,4 @@ It also appends a **Field-wise Analysis** section that shows:
 * Populated count in Sheet 1 for each compared field
 * Comparable count across both sheets
 * Mismatch count and mismatch percentage
-* A **RAG status** (`Green`, `Amber`, `Red`) for quick field health visibility
+* A **RAG status** (`Green` ≤ 5% mismatch, `Amber` ≤ 20%, `Red` > 20%) for quick field health visibility

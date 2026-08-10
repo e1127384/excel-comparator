@@ -595,11 +595,11 @@ func determineRAGStatus(comparedCount, mismatchCount, redStyle, amberStyle, gree
 	if comparedCount == 0 {
 		return "Amber", amberStyle
 	}
-	if mismatchCount == 0 {
-		return "Green", greenStyle
-	}
 
 	mismatchRate := float64(mismatchCount) / float64(comparedCount)
+	if mismatchRate <= 0.05 {
+		return "Green", greenStyle
+	}
 	if mismatchRate <= 0.20 {
 		return "Amber", amberStyle
 	}
