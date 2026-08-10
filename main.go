@@ -559,63 +559,6 @@ func compareData(fieldsToCompare []string, fieldGroups []FieldGroup, data1, data
 		if caseHasDiff {
 			diffCount++
 		}
-
-		func resolveKeyFields(headers, requestedKeyFields []string) ([]string, error) {
-			if len(headers) == 0 {
-				return nil, fmt.Errorf("missing header row")
-			}
-			if len(requestedKeyFields) == 0 {
-				return []string{headers[0]}, nil
-			}
-
-			headerMap := make(map[string]string, len(headers))
-			for _, h := range headers {
-				headerMap[strings.ToLower(strings.TrimSpace(h))] = h
-			}
-
-			resolved := make([]string, 0, len(requestedKeyFields))
-			seen := make(map[string]struct{}, len(requestedKeyFields))
-			for _, f := range requestedKeyFields {
-				norm := strings.ToLower(strings.TrimSpace(f))
-				h, ok := headerMap[norm]
-				if !ok {
-					return nil, fmt.Errorf("key field %q not found in headers", f)
-				}
-				if _, exists := seen[h]; exists {
-					continue
-				}
-				seen[h] = struct{}{}
-				resolved = append(resolved, h)
-			}
-			if len(resolved) == 0 {
-				return nil, fmt.Errorf("at least one key field is required")
-			}
-			return resolved, nil
-		}
-
-		func buildInternalKey(rowData map[string]string, keyFields []string) (string, bool) {
-			parts := make([]string, len(keyFields))
-			empty := true
-			for i, field := range keyFields {
-				v := strings.TrimSpace(rowData[field])
-				parts[i] = v
-				if v != "" {
-					empty = false
-				}
-			}
-			return strings.Join(parts, "\x00"), empty
-		}
-
-		func buildDisplayKey(rowData map[string]string, keyFields []string) string {
-			if len(keyFields) == 1 {
-				return rowData[keyFields[0]]
-			}
-			parts := make([]string, 0, len(keyFields))
-			for _, field := range keyFields {
-				parts = append(parts, fmt.Sprintf("%s=%s", field, rowData[field]))
-			}
-			return strings.Join(parts, ", ")
-		}
 	}
 
 	fmt.Println("\n================== SUMMARY ==================")
@@ -632,6 +575,63 @@ func compareData(fieldsToCompare []string, fieldGroups []FieldGroup, data1, data
 	}
 
 	return records, summaries
+}
+
+func resolveKeyFields(headers, requestedKeyFields []string) ([]string, error) {
+	if len(headers) == 0 {
+		return nil, fmt.Errorf("missing header row")
+	}
+	if len(requestedKeyFields) == 0 {
+		return []string{headers[0]}, nil
+	}
+
+	headerMap := make(map[string]string, len(headers))
+	for _, h := range headers {
+		headerMap[strings.ToLower(strings.TrimSpace(h))] = h
+	}
+
+	resolved := make([]string, 0, len(requestedKeyFields))
+	seen := make(map[string]struct{}, len(requestedKeyFields))
+	for _, f := range requestedKeyFields {
+		norm := strings.ToLower(strings.TrimSpace(f))
+		h, ok := headerMap[norm]
+		if !ok {
+			return nil, fmt.Errorf("key field %q not found in headers", f)
+		}
+		if _, exists := seen[h]; exists {
+			continue
+		}
+		seen[h] = struct{}{}
+		resolved = append(resolved, h)
+	}
+	if len(resolved) == 0 {
+		return nil, fmt.Errorf("at least one key field is required")
+	}
+	return resolved, nil
+}
+
+func buildInternalKey(rowData map[string]string, keyFields []string) (string, bool) {
+	parts := make([]string, len(keyFields))
+	empty := true
+	for i, field := range keyFields {
+		v := strings.TrimSpace(rowData[field])
+		parts[i] = v
+		if v != "" {
+			empty = false
+		}
+	}
+	return strings.Join(parts, "\x00"), empty
+}
+
+func buildDisplayKey(rowData map[string]string, keyFields []string) string {
+	if len(keyFields) == 1 {
+		return rowData[keyFields[0]]
+	}
+	parts := make([]string, 0, len(keyFields))
+	for _, field := range keyFields {
+		parts = append(parts, fmt.Sprintf("%s=%s", field, rowData[field]))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // applyMapping translates val1 based on the migration mapping rules if defined
