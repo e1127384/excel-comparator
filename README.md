@@ -154,10 +154,16 @@ normalizeList: false
 
 ## Understanding the Output Report
 
-The generated Excel workbook will contain a single worksheet titled **`Comparison Report`** structured as follows:
+The generated Excel workbook will contain a single worksheet titled **`Comparison Report`** with:
 
 * **`CaseID`**: The unique identifier extracted from the first column of your rows.
 * **`Field`**: The column header name where a mismatch was detected (or `[All Fields]` if the case ID itself is entirely missing from Sheet 2).
 * **`Sheet1 Value`**: The raw or mapped value recorded in the first file.
 * **`Sheet2 Value`**: The raw value recorded in the second file.
-* **`Status`**: Explanatory flag (`Missing in Sheet 2` or `Mismatch`).
+* **`Status`**: Explanatory flag (`Missing in Sheet 2` or `Mismatch`) with highlighting.
+
+It also appends a **Field-wise Analysis** section that shows:
+* Populated count in Sheet 1 for each compared field
+* Comparable count across both sheets
+* Mismatch count and mismatch percentage
+* A **RAG status** (`Green`, `Amber`, `Red`) for quick field health visibility
