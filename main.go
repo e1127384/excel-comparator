@@ -42,8 +42,21 @@ type DiffRecord struct {
 	Status string
 }
 
+// FieldSummary captures field-wise population and mismatch metrics
+type FieldSummary struct {
+	Field             string
+	PopulatedInSource int
+	ComparedCount     int
+	MismatchCount     int
+}
+
 // MappingRule stores value translations: FieldName -> {OldVal -> NewVal}
 type MappingRule map[string]map[string]string
+
+const (
+	ragGreenThreshold = 0.05
+	ragAmberThreshold = 0.20
+)
 
 // GroupMappingRule stores group-level combination translations:
 // GroupName -> {internalOldKey -> map[FieldName]NewVal}
@@ -110,10 +123,10 @@ func main() {
 	}
 
 	// Run Analysis and collect discrepancy records
-	records := compareData(fieldsToCompare, resolvedGroups, data1, data2, mappingRules, groupMappingRules, cfg)
+	records, fieldSummaries := compareData(fieldsToCompare, resolvedGroups, data1, data2, mappingRules, groupMappingRules, cfg)
 
 	// Export results to Excel
-	if err := writeReportToExcel(cfg.OutputFile, records); err != nil {
+	if err := writeReportToExcel(cfg.OutputFile, records, fieldSummaries); err != nil {
 		log.Fatalf("Failed to write output report Excel: %v", err)
 	}
 
@@ -349,7 +362,6 @@ func applyGroupMapping(groupName string, row map[string]string, fields []string,
 	return mapped
 }
 
-
 func loadExcelData(filePath, sheetName string) ([]string, map[string]map[string]string, error) {
 	f, err := excelize.OpenFile(filePath)
 	if err != nil {
@@ -392,10 +404,26 @@ func loadExcelData(filePath, sheetName string) ([]string, map[string]map[string]
 }
 
 // compareData performs the differential analysis and returns collected records
-func compareData(fieldsToCompare []string, fieldGroups []FieldGroup, data1, data2 map[string]map[string]string, mappingRules MappingRule, groupMappingRules GroupMappingRule, cfg Config) []DiffRecord {
+func compareData(fieldsToCompare []string, fieldGroups []FieldGroup, data1, data2 map[string]map[string]string, mappingRules MappingRule, groupMappingRules GroupMappingRule, cfg Config) ([]DiffRecord, []FieldSummary) {
 	var records []DiffRecord
+	fieldStats := make(map[string]FieldSummary, len(fieldsToCompare))
 
 	fmt.Println("================== ANALYSIS REPORT ==================")
+
+	for _, header := range fieldsToCompare {
+		fieldStats[header] = FieldSummary{Field: header}
+	}
+
+	for _, row1 := range data1 {
+		for _, header := range fieldsToCompare {
+			if strings.TrimSpace(row1[header]) == "" {
+				continue
+			}
+			stat := fieldStats[header]
+			stat.PopulatedInSource++
+			fieldStats[header] = stat
+		}
+	}
 
 	// 1. Check cases in File 1 but NOT in File 2
 	fmt.Println("\n--- 1. Cases in Sheet 1 Missing from Sheet 2 ---")
@@ -482,11 +510,22 @@ func compareData(fieldsToCompare []string, fieldGroups []FieldGroup, data1, data
 		for _, header := range fieldsToCompare {
 			val1 := row1[header]
 			val2 := row2[header]
+			populatedInSource := strings.TrimSpace(val1) != ""
+			if populatedInSource {
+				stat := fieldStats[header]
+				stat.ComparedCount++
+				fieldStats[header] = stat
+			}
 
 			// Apply migration mapping if available for this field
 			mappedVal1 := applyMapping(header, val1, mappingRules)
 
 			if !compareValues(mappedVal1, val2, header, cfg) {
+				if populatedInSource {
+					stat := fieldStats[header]
+					stat.MismatchCount++
+					fieldStats[header] = stat
+				}
 				caseHasDiff = true
 				reportVal1 := val1
 				if mappedVal1 != val1 {
@@ -516,7 +555,12 @@ func compareData(fieldsToCompare []string, fieldGroups []FieldGroup, data1, data
 	fmt.Printf("Cases with Mismatches:    %d\n", diffCount)
 	fmt.Println("=============================================")
 
-	return records
+	summaries := make([]FieldSummary, 0, len(fieldsToCompare))
+	for _, header := range fieldsToCompare {
+		summaries = append(summaries, fieldStats[header])
+	}
+
+	return records, summaries
 }
 
 // applyMapping translates val1 based on the migration mapping rules if defined
@@ -633,8 +677,8 @@ func parseDate(val string) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("not a date")
 }
 
-// writeReportToExcel creates the final Excel sheet with CaseID, Field, Value1, Value2, and Status
-func writeReportToExcel(outputPath string, records []DiffRecord) error {
+// writeReportToExcel creates the final Excel sheet with detailed mismatches and field-wise summary
+func writeReportToExcel(outputPath string, records []DiffRecord, summaries []FieldSummary) error {
 	f := excelize.NewFile()
 	sheetName := "Comparison Report"
 
@@ -651,6 +695,52 @@ func writeReportToExcel(outputPath string, records []DiffRecord) error {
 		f.SetCellValue(sheetName, cell, header)
 	}
 
+	headerStyle, err := f.NewStyle(&excelize.Style{
+		Font: &excelize.Font{Bold: true},
+		Fill: excelize.Fill{
+			Type:    "pattern",
+			Color:   []string{"#D9E1F2"},
+			Pattern: 1,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	if err := f.SetCellStyle(sheetName, "A1", "E1", headerStyle); err != nil {
+		return err
+	}
+
+	redStyle, err := f.NewStyle(&excelize.Style{
+		Fill: excelize.Fill{
+			Type:    "pattern",
+			Color:   []string{"#F8CBAD"},
+			Pattern: 1,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	amberStyle, err := f.NewStyle(&excelize.Style{
+		Fill: excelize.Fill{
+			Type:    "pattern",
+			Color:   []string{"#FFF2CC"},
+			Pattern: 1,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	greenStyle, err := f.NewStyle(&excelize.Style{
+		Fill: excelize.Fill{
+			Type:    "pattern",
+			Color:   []string{"#C6EFCE"},
+			Pattern: 1,
+		},
+	})
+	if err != nil {
+		return err
+	}
+
 	for rowIdx, rec := range records {
 		rNum := rowIdx + 2
 		f.SetCellValue(sheetName, fmt.Sprintf("A%d", rNum), rec.CaseID)
@@ -658,6 +748,61 @@ func writeReportToExcel(outputPath string, records []DiffRecord) error {
 		f.SetCellValue(sheetName, fmt.Sprintf("C%d", rNum), rec.Val1)
 		f.SetCellValue(sheetName, fmt.Sprintf("D%d", rNum), rec.Val2)
 		f.SetCellValue(sheetName, fmt.Sprintf("E%d", rNum), rec.Status)
+
+		switch rec.Status {
+		case "Mismatch":
+			if err := f.SetCellStyle(sheetName, fmt.Sprintf("E%d", rNum), fmt.Sprintf("E%d", rNum), redStyle); err != nil {
+				return err
+			}
+		case "Missing in Sheet 2":
+			if err := f.SetCellStyle(sheetName, fmt.Sprintf("E%d", rNum), fmt.Sprintf("E%d", rNum), amberStyle); err != nil {
+				return err
+			}
+		}
+	}
+
+	lastDetailRow := len(records) + 1 // +1 accounts for the report header row on row 1.
+	summaryTitleRow := lastDetailRow + 3
+	f.SetCellValue(sheetName, fmt.Sprintf("A%d", summaryTitleRow), "Field-wise Analysis")
+	if err := f.SetCellStyle(sheetName, fmt.Sprintf("A%d", summaryTitleRow), fmt.Sprintf("A%d", summaryTitleRow), headerStyle); err != nil {
+		return err
+	}
+
+	summaryHeaderRow := summaryTitleRow + 1
+	summaryHeaders := []string{"Field", "Populated in Sheet1", "Populated Rows with Case in Sheet2", "Mismatch Count", "Mismatch %", "RAG Status"}
+	for colIdx, header := range summaryHeaders {
+		cell, _ := excelize.CoordinatesToCellName(colIdx+1, summaryHeaderRow)
+		f.SetCellValue(sheetName, cell, header)
+	}
+	if err := f.SetCellStyle(sheetName, fmt.Sprintf("A%d", summaryHeaderRow), fmt.Sprintf("F%d", summaryHeaderRow), headerStyle); err != nil {
+		return err
+	}
+
+	for i, summary := range summaries {
+		rowNum := summaryHeaderRow + i + 1
+		f.SetCellValue(sheetName, fmt.Sprintf("A%d", rowNum), summary.Field)
+		f.SetCellValue(sheetName, fmt.Sprintf("B%d", rowNum), summary.PopulatedInSource)
+		f.SetCellValue(sheetName, fmt.Sprintf("C%d", rowNum), summary.ComparedCount)
+		f.SetCellValue(sheetName, fmt.Sprintf("D%d", rowNum), summary.MismatchCount)
+
+		mismatchPercent := 0.0
+		if summary.ComparedCount > 0 {
+			mismatchPercent = float64(summary.MismatchCount) / float64(summary.ComparedCount) * 100
+		}
+		f.SetCellValue(sheetName, fmt.Sprintf("E%d", rowNum), fmt.Sprintf("%.2f%%", mismatchPercent))
+
+		ragLabel, ragStyle := determineRAGStatus(summary.ComparedCount, summary.MismatchCount, redStyle, amberStyle, greenStyle)
+		f.SetCellValue(sheetName, fmt.Sprintf("F%d", rowNum), ragLabel)
+		if err := f.SetCellStyle(sheetName, fmt.Sprintf("F%d", rowNum), fmt.Sprintf("F%d", rowNum), ragStyle); err != nil {
+			return err
+		}
+	}
+
+	if err := f.SetColWidth(sheetName, "A", "A", 24); err != nil {
+		return err
+	}
+	if err := f.SetColWidth(sheetName, "B", "F", 22); err != nil {
+		return err
 	}
 
 	if err := f.SaveAs(outputPath); err != nil {
@@ -665,4 +810,19 @@ func writeReportToExcel(outputPath string, records []DiffRecord) error {
 	}
 
 	return nil
+}
+
+func determineRAGStatus(comparedCount, mismatchCount, redStyle, amberStyle, greenStyle int) (string, int) {
+	if comparedCount == 0 {
+		return "Amber (No comparable rows)", amberStyle
+	}
+
+	mismatchRate := float64(mismatchCount) / float64(comparedCount)
+	if mismatchRate <= ragGreenThreshold {
+		return "Green", greenStyle
+	}
+	if mismatchRate <= ragAmberThreshold {
+		return "Amber", amberStyle
+	}
+	return "Red", redStyle
 }
