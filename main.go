@@ -45,6 +45,11 @@ type DiffRecord struct {
 // MappingRule stores value translations: FieldName -> {OldVal -> NewVal}
 type MappingRule map[string]map[string]string
 
+// GroupMappingRule stores group-level combination translations:
+// GroupName -> {internalOldKey -> map[FieldName]NewVal}
+// The internal key is built by joining old field values with "\x00" as separator.
+type GroupMappingRule map[string]map[string]map[string]string
+
 func main() {
 	// Define CLI flag for config file path
 	configPath := flag.String("config", "config.yaml", "Path to configuration YAML file")
@@ -67,10 +72,15 @@ func main() {
 
 	// Load Migration Mapping Rules if provided
 	var mappingRules MappingRule
+	var groupMappingRules GroupMappingRule
 	if cfg.MappingFile != "" {
 		mappingRules, err = loadMappingRules(cfg.MappingFile)
 		if err != nil {
 			log.Fatalf("Failed to load mapping file: %v", err)
+		}
+		groupMappingRules, err = loadGroupMappingRules(cfg.MappingFile, cfg.FieldGroups)
+		if err != nil {
+			log.Fatalf("Failed to load group mapping rules: %v", err)
 		}
 	}
 
@@ -100,7 +110,7 @@ func main() {
 	}
 
 	// Run Analysis and collect discrepancy records
-	records := compareData(fieldsToCompare, resolvedGroups, data1, data2, mappingRules, cfg)
+	records := compareData(fieldsToCompare, resolvedGroups, data1, data2, mappingRules, groupMappingRules, cfg)
 
 	// Export results to Excel
 	if err := writeReportToExcel(cfg.OutputFile, records); err != nil {
@@ -225,7 +235,118 @@ func loadMappingRules(filePath string) (MappingRule, error) {
 	return rules, nil
 }
 
-// loadExcelData reads an excel sheet and maps CaseID (first column) -> Map[ColumnName]Value
+// loadGroupMappingRules reads the "GroupMappings" sheet from the mapping Excel file.
+// Expected column layout per group (each group occupies its own set of rows):
+//
+//	Col 0: GroupName
+//	Col 1..N: old field values (one column per field, in the same order as fieldGroups config)
+//	Col N+1..2N: new (expected) field values (same field order)
+//
+// Example for a "Geography" group with fields [country, sub-region, region]:
+//
+//	GroupName  | country | sub-region | region | country | sub-region | region
+//	Geography  | US      | NE         | NA     | USA     | Northeast  | North America
+func loadGroupMappingRules(filePath string, fieldGroups []FieldGroup) (GroupMappingRule, error) {
+	if len(fieldGroups) == 0 {
+		return nil, nil
+	}
+
+	f, err := excelize.OpenFile(filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	const sheetName = "GroupMappings"
+	rows, err := f.GetRows(sheetName)
+	if err != nil {
+		// Sheet doesn't exist — not an error, just no group mappings
+		return nil, nil
+	}
+	if len(rows) < 2 {
+		return nil, nil
+	}
+
+	// Build a lookup: groupName -> fieldCount for quick validation
+	groupFieldCount := make(map[string]int, len(fieldGroups))
+	groupFieldNames := make(map[string][]string, len(fieldGroups))
+	for _, g := range fieldGroups {
+		groupFieldCount[strings.ToLower(g.Name)] = len(g.Fields)
+		groupFieldNames[strings.ToLower(g.Name)] = g.Fields
+	}
+
+	rules := make(GroupMappingRule)
+
+	for i := 1; i < len(rows); i++ {
+		row := rows[i]
+		if len(row) == 0 || strings.TrimSpace(row[0]) == "" {
+			continue
+		}
+		groupName := strings.TrimSpace(row[0])
+		groupKey := strings.ToLower(groupName)
+
+		n, ok := groupFieldCount[groupKey]
+		if !ok {
+			continue // unknown group — skip
+		}
+
+		// Need at least 1 (GroupName) + n (old) + n (new) columns
+		if len(row) < 1+2*n {
+			continue
+		}
+
+		fields := groupFieldNames[groupKey]
+
+		// Build internal key from old-side values
+		oldVals := make([]string, n)
+		for j := 0; j < n; j++ {
+			oldVals[j] = strings.TrimSpace(row[1+j])
+		}
+		internalKey := strings.Join(oldVals, "\x00")
+
+		// Build new-side field map
+		newVals := make(map[string]string, n)
+		for j := 0; j < n; j++ {
+			newVals[fields[j]] = strings.TrimSpace(row[1+n+j])
+		}
+
+		if rules[groupName] == nil {
+			rules[groupName] = make(map[string]map[string]string)
+		}
+		rules[groupName][internalKey] = newVals
+	}
+
+	return rules, nil
+}
+
+// groupMappingKey builds the internal lookup key from a row's field values for a group.
+func groupMappingKey(row map[string]string, fields []string) string {
+	parts := make([]string, len(fields))
+	for i, f := range fields {
+		parts[i] = row[f]
+	}
+	return strings.Join(parts, "\x00")
+}
+
+// applyGroupMapping returns the mapped new-side field values for a group if a rule exists,
+// otherwise returns nil (meaning: use raw Sheet1 values).
+func applyGroupMapping(groupName string, row map[string]string, fields []string, rules GroupMappingRule) map[string]string {
+	if rules == nil {
+		return nil
+	}
+	groupRules, ok := rules[groupName]
+	if !ok {
+		return nil
+	}
+	key := groupMappingKey(row, fields)
+	mapped, ok := groupRules[key]
+	if !ok {
+		return nil
+	}
+	return mapped
+}
+
+
 func loadExcelData(filePath, sheetName string) ([]string, map[string]map[string]string, error) {
 	f, err := excelize.OpenFile(filePath)
 	if err != nil {
@@ -268,7 +389,7 @@ func loadExcelData(filePath, sheetName string) ([]string, map[string]map[string]
 }
 
 // compareData performs the differential analysis and returns collected records
-func compareData(fieldsToCompare []string, fieldGroups []FieldGroup, data1, data2 map[string]map[string]string, mappingRules MappingRule, cfg Config) []DiffRecord {
+func compareData(fieldsToCompare []string, fieldGroups []FieldGroup, data1, data2 map[string]map[string]string, mappingRules MappingRule, groupMappingRules GroupMappingRule, cfg Config) []DiffRecord {
 	var records []DiffRecord
 
 	fmt.Println("================== ANALYSIS REPORT ==================")
@@ -312,17 +433,29 @@ func compareData(fieldsToCompare []string, fieldGroups []FieldGroup, data1, data
 			val2Parts := make([]string, 0, len(group.Fields))
 			groupMismatch := false
 
+			// Apply group-level mapping: if the old-side combination has a rule, substitute mapped values
+			mappedGroupVals := applyGroupMapping(group.Name, row1, group.Fields, groupMappingRules)
+
 			for _, header := range group.Fields {
 				v1 := row1[header]
 				v2 := row2[header]
-				mapped1 := applyMapping(header, v1, mappingRules)
-				displayV1 := mapped1
-				if mapped1 != v1 {
-					displayV1 = fmt.Sprintf("%s (mapped to %s)", v1, mapped1)
+
+				// Determine the effective Sheet1 value for comparison:
+				// group mapping takes precedence over per-field mapping
+				var effectiveV1 string
+				if mappedGroupVals != nil {
+					effectiveV1 = mappedGroupVals[header]
+				} else {
+					effectiveV1 = applyMapping(header, v1, mappingRules)
+				}
+
+				displayV1 := effectiveV1
+				if effectiveV1 != v1 {
+					displayV1 = fmt.Sprintf("%s (mapped to %s)", v1, effectiveV1)
 				}
 				val1Parts = append(val1Parts, fmt.Sprintf("%s=%s", header, displayV1))
 				val2Parts = append(val2Parts, fmt.Sprintf("%s=%s", header, v2))
-				if !compareValues(mapped1, v2, header, cfg) {
+				if !compareValues(effectiveV1, v2, header, cfg) {
 					groupMismatch = true
 				}
 			}

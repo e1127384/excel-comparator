@@ -81,6 +81,7 @@ The CLI now reads parameters from a YAML config file.
 | `strictDate` | `false` | Enable or disable strict raw string date comparison. |
 | `normalizeList` | `true` | Treat comma and semicolon lists as equal. |
 | `compareFields` | `[]` | Optional list of field names to compare. Empty means compare all headers. |
+| `fieldGroups` | `[]` | Optional list of named field groups compared as a logical unit (see below). |
 
 Example `config.yaml`:
 
@@ -98,7 +99,56 @@ compareFields:
   - caseid
   - status
   - start_date
+fieldGroups:
+  - name: "Geography"
+    fields: [country, sub-region, region]
+  - name: "Classification"
+    fields: [category, sub-category]
 ```
+
+### Field Groups
+
+`fieldGroups` lets you compare a combination of related fields as a single logical unit. If **any** field in the group differs, one row is written to the report using the group name — instead of a separate row per field.
+
+Fields that belong to a group are automatically excluded from standalone `compareFields` comparison to avoid duplicate reporting.
+
+---
+
+## Migration Mapping Rules
+
+Set `mappingFile` in `config.yaml` to an Excel file that contains two types of mapping sheets:
+
+### Sheet 1 (first sheet) — Per-Field Mappings
+
+Translates a single field's old value to the expected new value.
+
+| FieldName | OldValue | NewValue |
+|-----------|----------|----------|
+| status    | Active   | ACTIVE   |
+| region    | NA       | North America |
+
+### Sheet `GroupMappings` — Group-Level Combination Mappings
+
+Maps an entire combination of field values (for a named field group) from old to new. Each field occupies its own column — **N old-value columns followed by N new-value columns**, matching the field order defined in `fieldGroups`.
+
+**Column layout:** `GroupName | field1 (old) | field2 (old) | … | field1 (new) | field2 (new) | …`
+
+Example for a `Geography` group with fields `[country, sub-region, region]`:
+
+| GroupName | country | sub-region | region | country | sub-region | region |
+|-----------|---------|------------|--------|---------|------------|--------|
+| Geography | US      | NE         | NA     | USA     | Northeast  | North America |
+| Geography | UK      | SE         | EU     | GBR     | South East | Europe |
+
+Example for a `Classification` group with fields `[category, sub-category]`:
+
+| GroupName      | category | sub-category | category   | sub-category |
+|----------------|----------|--------------|------------|--------------|
+| Classification | Tech     | HW           | Technology | Hardware     |
+
+> **Note:** The `GroupMappings` sheet is optional. If it is absent from the mapping file, group fields fall back to per-field mapping rules (or raw comparison).
+
+
 
 You can start from the committed template:
 
