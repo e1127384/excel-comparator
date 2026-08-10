@@ -316,7 +316,11 @@ func compareData(fieldsToCompare []string, fieldGroups []FieldGroup, data1, data
 				v1 := row1[header]
 				v2 := row2[header]
 				mapped1 := applyMapping(header, v1, mappingRules)
-				val1Parts = append(val1Parts, fmt.Sprintf("%s=%s", header, v1))
+				displayV1 := mapped1
+				if mapped1 != v1 {
+					displayV1 = fmt.Sprintf("%s (mapped to %s)", v1, mapped1)
+				}
+				val1Parts = append(val1Parts, fmt.Sprintf("%s=%s", header, displayV1))
 				val2Parts = append(val2Parts, fmt.Sprintf("%s=%s", header, v2))
 				if !compareValues(mapped1, v2, header, cfg) {
 					groupMismatch = true
