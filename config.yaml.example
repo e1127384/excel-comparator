@@ -2,13 +2,17 @@ file1: file1.xlsx
 file2: file2.xlsx
 sheet1: Sheet1
 sheet2: Sheet1
+# Optional. Empty means use first column only (current behavior).
+# keyFields: [caseid, country]
+keyFields: []
 mappingFile: ""
 outputFile: comparison_report.xlsx
 caseSensitive: false
 strictDate: false
 normalizeList: true
 compareFields: []
-
+caseQualifier: ""
+fieldGroups: []
 # caseQualifier filters which records from File 1 are included in the comparison.
 # If omitted or empty, all records are considered.
 # Supported operators: = != IN NOT IN
@@ -20,4 +24,9 @@ compareFields: []
 #   caseQualifier: "Status != Cancelled"
 #   caseQualifier: "Status != Cancelled AND Case Id NOT IN (caseid1, caseid2)"
 #   caseQualifier: "(Status = Open OR Status = Pending) AND Priority != Low"
-caseQualifier: ""
+# fieldGroups example:
+# fieldGroups:
+#   - name: "Geography"
+#     fields: [country, sub-region, region]
+#   - name: "Classification"
+#     fields: [category, sub-category]
