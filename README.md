@@ -81,6 +81,7 @@ The CLI now reads parameters from a YAML config file.
 | `caseSensitive` | `false` | Enable or disable case-sensitive comparison. |
 | `strictDate` | `false` | Enable or disable strict raw string date comparison. |
 | `normalizeList` | `true` | Treat comma and semicolon lists as equal. |
+| `showMatchedValues` | `false` | In grouped mapping mode, keep old/new values visible for matched rows. |
 | `compareFields` | `[]` | Optional list of field names to compare. Empty means compare all headers. |
 | `fieldGroups` | `[]` | Optional list of named field groups compared as a logical unit (see below). |
 
@@ -99,6 +100,7 @@ outputFile: comparison_report.xlsx
 caseSensitive: false
 strictDate: false
 normalizeList: true
+showMatchedValues: false
 compareFields:
   - caseid
   - status
@@ -121,6 +123,18 @@ Fields that belong to a group are automatically excluded from standalone `compar
 ## Migration Mapping Rules
 
 Set `mappingFile` in `config.yaml` to an Excel file that contains two types of mapping sheets:
+
+### Grouped workbook format (new, backward compatible)
+
+If a sheet named **`SingleFields`** exists, grouped mode is enabled:
+
+1. `SingleFields` sheet: per-field mappings (`FieldName`, `OldValue`, `NewValue`).
+2. One sheet per multi-field group (sheet name = group name), with group old/new mapping columns.
+3. Group sheet tab order is preserved and reused in grouped output ordering.
+
+Optional mapping columns are tolerated where possible (for example missing `NewValue` defaults to `OldValue`), and malformed rows are skipped with warnings.
+
+### Legacy workbook format (still supported)
 
 ### Sheet 1 (first sheet) — Per-Field Mappings
 
@@ -152,6 +166,8 @@ Example for a `Classification` group with fields `[category, sub-category]`:
 
 > **Note:** The `GroupMappings` sheet is optional. If it is absent from the mapping file, group fields fall back to per-field mapping rules (or raw comparison).
 
+> **Compatibility note:** Existing mapping files, config, CLI usage, and legacy output remain unchanged by default when grouped mode is not used.
+
 
 
 You can start from the committed template:
@@ -176,6 +192,12 @@ Or provide a custom path:
 
 ```bash
 go run main.go -config /path/to/config.yaml
+```
+
+To force matched values to stay visible in grouped output mode:
+
+```bash
+go run main.go -config /path/to/config.yaml -show-matched-values
 ```
 
 ### 2. Running with Migration Mapping Rules
@@ -222,3 +244,16 @@ It also appends a **Field-wise Analysis** section that shows:
 * Mismatch count and mismatch percentage
 * A **RAG status** (`Green` ≤ 5% mismatch, `Amber` ≤ 20%, `Red` > 20%) for quick field health visibility
   * If no comparable rows exist for a field, status is shown as `Amber (No comparable rows)`
+
+### Grouped mode output workbook
+
+When grouped mapping mode is active, the output workbook contains:
+
+1. `SingleFields` result sheet first
+2. Then one sheet per group in mapping workbook tab order
+
+Each row includes:
+
+* `old_raw_value`, `new_raw_value`, `raw_match`
+* `old_normalized_value`, `new_normalized_value`, `normalized_match`
+* `final_status` in `{FULL_MATCH, MATCH_AFTER_NORMALIZATION, RAW_MATCH_ONLY, MISMATCH}`
