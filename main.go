@@ -450,7 +450,7 @@ type GroupMappingRule map[string]map[string]map[string]string
 func main() {
 	// Define CLI flag for config file path
 	configPath := flag.String("config", "config.yaml", "Path to configuration YAML file")
-	showMatchedValues := flag.Bool("show-matched-values", false, "Show old/new values for matched rows in grouped output mode")
+	showMatchedValues := flag.Bool("show-matched-values", false, "Show old/new values for matched rows in grouped output mode, including SingleFields")
 	flag.Parse()
 
 	cfg, err := loadConfig(*configPath)
@@ -1546,13 +1546,17 @@ func parseDate(val string) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("not a date")
 }
 
-// writeReportToExcel creates the final Excel sheet with detailed mismatches and field-wise summary
+// writeReportToExcel creates the final Excel workbook with a comparison sheet and field-wise analysis sheet.
 func writeReportToExcel(outputPath string, records []DiffRecord, summaries []FieldSummary) error {
 	f := excelize.NewFile()
 	sheetName := "Comparison Report"
+	summarySheetName := "Field-wise Analysis"
 
 	index, err := f.NewSheet(sheetName)
 	if err != nil {
+		return err
+	}
+	if _, err := f.NewSheet(summarySheetName); err != nil {
 		return err
 	}
 	f.SetActiveSheet(index)
@@ -1630,39 +1634,37 @@ func writeReportToExcel(outputPath string, records []DiffRecord, summaries []Fie
 		}
 	}
 
-	lastDetailRow := len(records) + 1 // +1 accounts for the report header row on row 1.
-	summaryTitleRow := lastDetailRow + 3
-	f.SetCellValue(sheetName, fmt.Sprintf("A%d", summaryTitleRow), "Field-wise Analysis")
-	if err := f.SetCellStyle(sheetName, fmt.Sprintf("A%d", summaryTitleRow), fmt.Sprintf("A%d", summaryTitleRow), headerStyle); err != nil {
+	f.SetCellValue(summarySheetName, "A1", "Field-wise Analysis")
+	if err := f.SetCellStyle(summarySheetName, "A1", "A1", headerStyle); err != nil {
 		return err
 	}
 
-	summaryHeaderRow := summaryTitleRow + 1
+	summaryHeaderRow := 2
 	summaryHeaders := []string{"Field", "Populated in Sheet1", "Populated Rows with Case in Sheet2", "Mismatch Count", "Mismatch %", "RAG Status"}
 	for colIdx, header := range summaryHeaders {
 		cell, _ := excelize.CoordinatesToCellName(colIdx+1, summaryHeaderRow)
-		f.SetCellValue(sheetName, cell, header)
+		f.SetCellValue(summarySheetName, cell, header)
 	}
-	if err := f.SetCellStyle(sheetName, fmt.Sprintf("A%d", summaryHeaderRow), fmt.Sprintf("F%d", summaryHeaderRow), headerStyle); err != nil {
+	if err := f.SetCellStyle(summarySheetName, fmt.Sprintf("A%d", summaryHeaderRow), fmt.Sprintf("F%d", summaryHeaderRow), headerStyle); err != nil {
 		return err
 	}
 
 	for i, summary := range summaries {
 		rowNum := summaryHeaderRow + i + 1
-		f.SetCellValue(sheetName, fmt.Sprintf("A%d", rowNum), summary.Field)
-		f.SetCellValue(sheetName, fmt.Sprintf("B%d", rowNum), summary.PopulatedInSource)
-		f.SetCellValue(sheetName, fmt.Sprintf("C%d", rowNum), summary.ComparedCount)
-		f.SetCellValue(sheetName, fmt.Sprintf("D%d", rowNum), summary.MismatchCount)
+		f.SetCellValue(summarySheetName, fmt.Sprintf("A%d", rowNum), summary.Field)
+		f.SetCellValue(summarySheetName, fmt.Sprintf("B%d", rowNum), summary.PopulatedInSource)
+		f.SetCellValue(summarySheetName, fmt.Sprintf("C%d", rowNum), summary.ComparedCount)
+		f.SetCellValue(summarySheetName, fmt.Sprintf("D%d", rowNum), summary.MismatchCount)
 
 		mismatchPercent := 0.0
 		if summary.ComparedCount > 0 {
 			mismatchPercent = float64(summary.MismatchCount) / float64(summary.ComparedCount) * 100
 		}
-		f.SetCellValue(sheetName, fmt.Sprintf("E%d", rowNum), fmt.Sprintf("%.2f%%", mismatchPercent))
+		f.SetCellValue(summarySheetName, fmt.Sprintf("E%d", rowNum), fmt.Sprintf("%.2f%%", mismatchPercent))
 
 		ragLabel, ragStyle := determineRAGStatus(summary.ComparedCount, summary.MismatchCount, redStyle, amberStyle, greenStyle)
-		f.SetCellValue(sheetName, fmt.Sprintf("F%d", rowNum), ragLabel)
-		if err := f.SetCellStyle(sheetName, fmt.Sprintf("F%d", rowNum), fmt.Sprintf("F%d", rowNum), ragStyle); err != nil {
+		f.SetCellValue(summarySheetName, fmt.Sprintf("F%d", rowNum), ragLabel)
+		if err := f.SetCellStyle(summarySheetName, fmt.Sprintf("F%d", rowNum), fmt.Sprintf("F%d", rowNum), ragStyle); err != nil {
 			return err
 		}
 	}
@@ -1671,6 +1673,12 @@ func writeReportToExcel(outputPath string, records []DiffRecord, summaries []Fie
 		return err
 	}
 	if err := f.SetColWidth(sheetName, "B", "F", 22); err != nil {
+		return err
+	}
+	if err := f.SetColWidth(summarySheetName, "A", "A", 24); err != nil {
+		return err
+	}
+	if err := f.SetColWidth(summarySheetName, "B", "F", 22); err != nil {
 		return err
 	}
 

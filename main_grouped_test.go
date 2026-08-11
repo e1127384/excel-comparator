@@ -23,7 +23,7 @@ func TestLegacyReportHeadersUnchanged(t *testing.T) {
 	}
 	defer f.Close()
 
-	if got := f.GetSheetList(); len(got) != 1 || got[0] != "Comparison Report" {
+	if got := f.GetSheetList(); len(got) == 0 || got[0] != "Comparison Report" {
 		t.Fatalf("unexpected sheet list: %v", got)
 	}
 
@@ -34,6 +34,48 @@ func TestLegacyReportHeadersUnchanged(t *testing.T) {
 	want := []string{"CaseID", "Field", "Sheet1 Value", "Sheet2 Value", "Status"}
 	if !reflect.DeepEqual(headers[0], want) {
 		t.Fatalf("legacy header changed, got=%v want=%v", headers[0], want)
+	}
+}
+
+func TestLegacyReportWritesFieldWiseAnalysisToDedicatedSheet(t *testing.T) {
+	outPath := filepath.Join(t.TempDir(), "legacy_report.xlsx")
+	records := []DiffRecord{{CaseID: "1", Field: "status", Val1: "A", Val2: "B", Status: "Mismatch"}}
+	summaries := []FieldSummary{{Field: "status", PopulatedInSource: 1, ComparedCount: 1, MismatchCount: 1}}
+
+	if err := writeReportToExcel(outPath, records, summaries); err != nil {
+		t.Fatalf("writeReportToExcel failed: %v", err)
+	}
+
+	f, err := excelize.OpenFile(outPath)
+	if err != nil {
+		t.Fatalf("open output failed: %v", err)
+	}
+	defer f.Close()
+
+	if got, want := f.GetSheetList(), []string{"Comparison Report", "Field-wise Analysis"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected sheet list got=%v want=%v", got, want)
+	}
+
+	reportRows, err := f.GetRows("Comparison Report")
+	if err != nil {
+		t.Fatalf("read comparison report failed: %v", err)
+	}
+	if got, want := len(reportRows), 2; got != want {
+		t.Fatalf("expected comparison report rows without embedded summary got=%d want=%d", got, want)
+	}
+
+	summaryRows, err := f.GetRows("Field-wise Analysis")
+	if err != nil {
+		t.Fatalf("read field-wise analysis failed: %v", err)
+	}
+	if got, want := summaryRows[0], []string{"Field-wise Analysis"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected summary title row got=%v want=%v", got, want)
+	}
+	if got, want := summaryRows[1], []string{"Field", "Populated in Sheet1", "Populated Rows with Case in Sheet2", "Mismatch Count", "Mismatch %", "RAG Status"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected summary header row got=%v want=%v", got, want)
+	}
+	if got, want := summaryRows[2], []string{"status", "1", "1", "1", "100.00%", "Red"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected summary data row got=%v want=%v", got, want)
 	}
 }
 
@@ -150,28 +192,62 @@ func TestFinalStatusMatrix(t *testing.T) {
 	}
 }
 
-func TestMatchedValueVisibilityToggle(t *testing.T) {
-	data1 := map[string]map[string]string{"k1": {"status": "Active"}}
-	data2 := map[string]map[string]string{"k1": {"status": "active"}}
-	keyDisplay := map[string]string{"k1": "k1"}
+func TestSingleFieldsMatchedValueVisibilityToggle(t *testing.T) {
+	cases := []struct {
+		name       string
+		oldValue   string
+		newValue   string
+		cfg        Config
+		wantStatus string
+	}{
+		{
+			name:       "full match",
+			oldValue:   "Active",
+			newValue:   "Active",
+			cfg:        Config{},
+			wantStatus: "FULL_MATCH",
+		},
+		{
+			name:       "match after normalization",
+			oldValue:   "Active",
+			newValue:   "active",
+			cfg:        Config{},
+			wantStatus: "MATCH_AFTER_NORMALIZATION",
+		},
+	}
 
-	cfgHidden := Config{NormalizeList: true, ShowMatchedValues: false}
-	resultsHidden := compareDataGrouped([]string{"status"}, nil, data1, data2, keyDisplay, nil, nil, cfgHidden, nil)
-	if len(resultsHidden) != 1 || len(resultsHidden[0].Records) != 1 {
-		t.Fatalf("unexpected grouped results: %+v", resultsHidden)
-	}
-	recHidden := resultsHidden[0].Records[0]
-	if recHidden.FinalStatus != "MATCH_AFTER_NORMALIZATION" {
-		t.Fatalf("unexpected status: %s", recHidden.FinalStatus)
-	}
-	if recHidden.OldRawValue != "" || recHidden.NewRawValue != "" || recHidden.OldNormalizedValue != "" || recHidden.NewNormalizedValue != "" {
-		t.Fatalf("expected matched values hidden, got %+v", recHidden)
-	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data1 := map[string]map[string]string{"k1": {"status": tc.oldValue}}
+			data2 := map[string]map[string]string{"k1": {"status": tc.newValue}}
+			keyDisplay := map[string]string{"k1": "k1"}
 
-	cfgShown := Config{NormalizeList: true, ShowMatchedValues: true}
-	resultsShown := compareDataGrouped([]string{"status"}, nil, data1, data2, keyDisplay, nil, nil, cfgShown, nil)
-	recShown := resultsShown[0].Records[0]
-	if recShown.OldRawValue == "" || recShown.NewRawValue == "" || recShown.OldNormalizedValue == "" || recShown.NewNormalizedValue == "" {
-		t.Fatalf("expected matched values visible, got %+v", recShown)
+			cfgHidden := tc.cfg
+			resultsHidden := compareDataGrouped([]string{"status"}, nil, data1, data2, keyDisplay, nil, nil, cfgHidden, nil)
+			if len(resultsHidden) != 1 || resultsHidden[0].SheetName != "SingleFields" || len(resultsHidden[0].Records) != 1 {
+				t.Fatalf("unexpected grouped results: %+v", resultsHidden)
+			}
+			recHidden := resultsHidden[0].Records[0]
+			if recHidden.FinalStatus != tc.wantStatus {
+				t.Fatalf("unexpected status: %s", recHidden.FinalStatus)
+			}
+			if recHidden.OldRawValue != "" || recHidden.NewRawValue != "" || recHidden.OldNormalizedValue != "" || recHidden.NewNormalizedValue != "" {
+				t.Fatalf("expected matched values hidden, got %+v", recHidden)
+			}
+
+			cfgShown := tc.cfg
+			cfgShown.ShowMatchedValues = true
+			resultsShown := compareDataGrouped([]string{"status"}, nil, data1, data2, keyDisplay, nil, nil, cfgShown, nil)
+			recShown := resultsShown[0].Records[0]
+			if recShown.FinalStatus != tc.wantStatus {
+				t.Fatalf("unexpected shown status: %s", recShown.FinalStatus)
+			}
+			if recShown.OldRawValue != tc.oldValue || recShown.NewRawValue != tc.newValue {
+				t.Fatalf("expected raw values visible, got %+v", recShown)
+			}
+			if recShown.OldNormalizedValue == "" || recShown.NewNormalizedValue == "" {
+				t.Fatalf("expected normalized values visible, got %+v", recShown)
+			}
+		})
 	}
 }

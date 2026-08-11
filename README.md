@@ -81,7 +81,7 @@ The CLI now reads parameters from a YAML config file.
 | `caseSensitive` | `false` | Enable or disable case-sensitive comparison. |
 | `strictDate` | `false` | Enable or disable strict raw string date comparison. |
 | `normalizeList` | `true` | Treat comma and semicolon lists as equal. |
-| `showMatchedValues` | `false` | In grouped mapping mode, keep old/new values visible for matched rows. |
+| `showMatchedValues` | `false` | In grouped mapping mode, keep old/new raw and normalized values visible for matched rows, including on the `SingleFields` result sheet. |
 | `compareFields` | `[]` | Optional list of field names to compare. Empty means compare all headers. |
 | `fieldGroups` | `[]` | Optional list of named field groups compared as a logical unit (see below). |
 
@@ -194,7 +194,7 @@ Or provide a custom path:
 go run main.go -config /path/to/config.yaml
 ```
 
-To force matched values to stay visible in grouped output mode:
+To force matched values to stay visible in grouped output mode, including the `SingleFields` result sheet:
 
 ```bash
 go run main.go -config /path/to/config.yaml -show-matched-values
@@ -230,7 +230,7 @@ normalizeList: false
 
 ## Understanding the Output Report
 
-The generated Excel workbook will contain a single worksheet titled **`Comparison Report`** with:
+The generated Excel workbook will contain a worksheet titled **`Comparison Report`** with:
 
 * **`CaseID`**: The row key used for matching records (single key value or composite `field=value` pairs).
 * **`Field`**: The column header name where a mismatch was detected (or `[All Fields]` if the case ID itself is entirely missing from Sheet 2).
@@ -238,7 +238,7 @@ The generated Excel workbook will contain a single worksheet titled **`Compariso
 * **`Sheet2 Value`**: The raw value recorded in the second file.
 * **`Status`**: Explanatory flag (`Missing in Sheet 2` or `Mismatch`) with highlighting.
 
-It also appends a **Field-wise Analysis** section that shows:
+The workbook also includes a dedicated **`Field-wise Analysis`** worksheet that shows:
 * Populated count in Sheet 1 for each compared field
 * Count of populated Sheet 1 rows whose Case ID exists in Sheet 2
 * Mismatch count and mismatch percentage
@@ -257,3 +257,5 @@ Each row includes:
 * `old_raw_value`, `new_raw_value`, `raw_match`
 * `old_normalized_value`, `new_normalized_value`, `normalized_match`
 * `final_status` in `{FULL_MATCH, MATCH_AFTER_NORMALIZATION, RAW_MATCH_ONLY, MISMATCH}`
+
+When `showMatchedValues` is `true`, matched rows on `SingleFields` and grouped sheets keep the raw and normalized old/new value columns populated instead of blanking them.
