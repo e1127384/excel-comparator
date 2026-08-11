@@ -257,7 +257,7 @@ Each row includes:
 * `old_raw_value`, `new_raw_value`, `raw_match`
 * `old_normalized_value`, `new_normalized_value`, `normalized_match`
 * `final_match` (the comparator’s final boolean result)
-* `final_status` in `{FULL_MATCH, MATCH_AFTER_NORMALIZATION, MATCH_BY_COMPARATOR, MISMATCH}`
+* `final_status` in `{FULL_MATCH, MATCH_AFTER_NORMALIZATION, RAW_MATCH_ONLY, MATCH_BY_COMPARATOR, MISMATCH}`
 * `comparison_reason` (for example `mismatch`, `equal_after_normalization`)
 
 When `showMatchedValues` is `true`, both matched and mismatched rows are emitted. When it is `false`, only rows with `final_match=false` are emitted.

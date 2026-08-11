@@ -1346,6 +1346,8 @@ func classifyFinalStatus(rawMatch, normalizedMatch, finalMatch bool) string {
 		return "FULL_MATCH"
 	case !rawMatch && normalizedMatch:
 		return "MATCH_AFTER_NORMALIZATION"
+	case rawMatch && !normalizedMatch:
+		return "RAW_MATCH_ONLY"
 	default:
 		return "MATCH_BY_COMPARATOR"
 	}
@@ -1355,13 +1357,16 @@ func classifyComparisonReason(rawMatch, normalizedMatch, finalMatch bool) string
 	if !finalMatch {
 		return "mismatch"
 	}
-	if rawMatch {
-		return "equal_raw"
-	}
-	if normalizedMatch {
+	switch {
+	case rawMatch && normalizedMatch:
+		return "equal_exact"
+	case rawMatch && !normalizedMatch:
+		return "equal_raw_only"
+	case normalizedMatch:
 		return "equal_after_normalization"
+	default:
+		return "equal_by_comparator"
 	}
-	return "equal_by_comparator"
 }
 
 func normalizeValueForComparison(val, header string, cfg Config) string {
