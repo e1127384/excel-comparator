@@ -211,7 +211,7 @@ func TestSingleFieldsMatchedValueVisibilityToggle(t *testing.T) {
 			name:       "match after normalization",
 			oldValue:   "Active",
 			newValue:   "active",
-			cfg:        Config{},
+			cfg:        Config{NormalizeList: true},
 			wantStatus: "MATCH_AFTER_NORMALIZATION",
 		},
 	}
