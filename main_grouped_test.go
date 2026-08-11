@@ -181,8 +181,11 @@ func TestFinalStatusMatrix(t *testing.T) {
 	}{
 		{true, true, true, "FULL_MATCH"},
 		{false, true, true, "MATCH_AFTER_NORMALIZATION"},
+		{true, false, true, "RAW_MATCH_ONLY"},
 		{false, false, true, "MATCH_BY_COMPARATOR"},
 		{true, true, false, "MISMATCH"},
+		{true, false, false, "MISMATCH"},
+		{false, true, false, "MISMATCH"},
 		{false, false, false, "MISMATCH"},
 	}
 
