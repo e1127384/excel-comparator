@@ -32,5 +32,6 @@ fieldGroups: []
 #   - name: "Classification"
 #     fields: [category, sub-category]
 #
-# showMatchedValues controls grouped output mode only. When true, old/new raw and
-# normalized values remain visible even when a row is a match.
+# showMatchedValues controls grouped output mode, including the SingleFields
+# result sheet. When true, matched rows keep old/new raw and normalized values
+# visible instead of blanking them out.
