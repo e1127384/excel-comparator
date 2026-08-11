@@ -1260,7 +1260,7 @@ func compareDataGrouped(fieldsToCompare []string, fieldGroups []FieldGroup, data
 		displayKey := keyDisplay1[caseKey]
 		if !exists {
 			for _, header := range fieldsToCompare {
-				rec := buildGroupedDiffRecord(displayKey, header, applyMapping(header, row1[header], mappingRules), "", header, cfg)
+				rec := buildGroupedDiffRecord(displayKey, header, applyMapping(header, row1[header], mappingRules), "", cfg)
 				singleSheet.Records = append(singleSheet.Records, maskGroupedRecordValues(rec, cfg.ShowMatchedValues))
 			}
 			for _, group := range fieldGroups {
@@ -1269,7 +1269,7 @@ func compareDataGrouped(fieldsToCompare []string, fieldGroups []FieldGroup, data
 					if mapped := applyGroupMapping(group.Name, row1, group.Fields, groupMappingRules); mapped != nil {
 						effective = mapped[header]
 					}
-					rec := buildGroupedDiffRecord(displayKey, header, effective, "", header, cfg)
+					rec := buildGroupedDiffRecord(displayKey, header, effective, "", cfg)
 					groupSheets[group.Name].Records = append(groupSheets[group.Name].Records, maskGroupedRecordValues(rec, cfg.ShowMatchedValues))
 				}
 			}
@@ -1278,7 +1278,7 @@ func compareDataGrouped(fieldsToCompare []string, fieldGroups []FieldGroup, data
 
 		for _, header := range fieldsToCompare {
 			effective := applyMapping(header, row1[header], mappingRules)
-			rec := buildGroupedDiffRecord(displayKey, header, effective, row2[header], header, cfg)
+			rec := buildGroupedDiffRecord(displayKey, header, effective, row2[header], cfg)
 			singleSheet.Records = append(singleSheet.Records, maskGroupedRecordValues(rec, cfg.ShowMatchedValues))
 		}
 
@@ -1289,7 +1289,7 @@ func compareDataGrouped(fieldsToCompare []string, fieldGroups []FieldGroup, data
 				if mappedGroupVals != nil {
 					effective = mappedGroupVals[header]
 				}
-				rec := buildGroupedDiffRecord(displayKey, header, effective, row2[header], header, cfg)
+				rec := buildGroupedDiffRecord(displayKey, header, effective, row2[header], cfg)
 				groupSheets[group.Name].Records = append(groupSheets[group.Name].Records, maskGroupedRecordValues(rec, cfg.ShowMatchedValues))
 			}
 		}
@@ -1314,9 +1314,9 @@ func sortedMapKeys(m map[string]map[string]string) []string {
 	return keys
 }
 
-func buildGroupedDiffRecord(caseID, field, oldRaw, newRaw, header string, cfg Config) GroupedDiffRecord {
-	oldNorm := normalizeValueForComparison(oldRaw, header, cfg)
-	newNorm := normalizeValueForComparison(newRaw, header, cfg)
+func buildGroupedDiffRecord(caseID, field, oldRaw, newRaw string, cfg Config) GroupedDiffRecord {
+	oldNorm := normalizeValueForComparison(oldRaw, field, cfg)
+	newNorm := normalizeValueForComparison(newRaw, field, cfg)
 	rawMatch := oldRaw == newRaw
 	normalizedMatch := oldNorm == newNorm
 	return GroupedDiffRecord{
@@ -1797,10 +1797,11 @@ func truncateSheetName(name string, maxLen int) string {
 	if maxLen <= 0 {
 		return ""
 	}
-	if len(name) <= maxLen {
+	runes := []rune(name)
+	if len(runes) <= maxLen {
 		return name
 	}
-	return name[:maxLen]
+	return string(runes[:maxLen])
 }
 
 func determineRAGStatus(comparedCount, mismatchCount, redStyle, amberStyle, greenStyle int) (string, int) {
