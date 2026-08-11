@@ -81,7 +81,7 @@ The CLI now reads parameters from a YAML config file.
 | `caseSensitive` | `false` | Enable or disable case-sensitive comparison. |
 | `strictDate` | `false` | Enable or disable strict raw string date comparison. |
 | `normalizeList` | `true` | Treat comma and semicolon lists as equal. |
-| `showMatchedValues` | `false` | In grouped mapping mode, keep old/new raw and normalized values visible for matched rows, including on the `SingleFields` result sheet. |
+| `showMatchedValues` | `false` | In grouped mapping mode, include matched rows in output when enabled. When disabled, only final mismatches are emitted. |
 | `compareFields` | `[]` | Optional list of field names to compare. Empty means compare all headers. |
 | `fieldGroups` | `[]` | Optional list of named field groups compared as a logical unit (see below). |
 
@@ -256,6 +256,8 @@ Each row includes:
 
 * `old_raw_value`, `new_raw_value`, `raw_match`
 * `old_normalized_value`, `new_normalized_value`, `normalized_match`
-* `final_status` in `{FULL_MATCH, MATCH_AFTER_NORMALIZATION, RAW_MATCH_ONLY, MISMATCH}`
+* `final_match` (the comparator’s final boolean result)
+* `final_status` in `{FULL_MATCH, MATCH_AFTER_NORMALIZATION, MATCH_BY_COMPARATOR, MISMATCH}`
+* `comparison_reason` (for example `mismatch`, `equal_after_normalization`)
 
-When `showMatchedValues` is `true`, matched rows on `SingleFields` and grouped sheets keep the raw and normalized old/new value columns populated instead of blanking them.
+When `showMatchedValues` is `true`, both matched and mismatched rows are emitted. When it is `false`, only rows with `final_match=false` are emitted.

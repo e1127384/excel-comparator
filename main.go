@@ -420,7 +420,9 @@ type GroupedDiffRecord struct {
 	OldNormalizedValue string
 	NewNormalizedValue string
 	NormalizedMatch    bool
+	FinalMatch         bool
 	FinalStatus        string
+	ComparisonReason   string
 }
 
 type GroupedSheetResult struct {
@@ -1261,7 +1263,7 @@ func compareDataGrouped(fieldsToCompare []string, fieldGroups []FieldGroup, data
 		if !exists {
 			for _, header := range fieldsToCompare {
 				rec := buildGroupedDiffRecord(displayKey, header, applyMapping(header, row1[header], mappingRules), "", cfg)
-				singleSheet.Records = append(singleSheet.Records, maskGroupedRecordValues(rec, cfg.ShowMatchedValues))
+				singleSheet.Records = appendGroupedRecord(singleSheet.Records, rec, cfg.ShowMatchedValues)
 			}
 			for _, group := range fieldGroups {
 				for _, header := range group.Fields {
@@ -1270,7 +1272,7 @@ func compareDataGrouped(fieldsToCompare []string, fieldGroups []FieldGroup, data
 						effective = mapped[header]
 					}
 					rec := buildGroupedDiffRecord(displayKey, header, effective, "", cfg)
-					groupSheets[group.Name].Records = append(groupSheets[group.Name].Records, maskGroupedRecordValues(rec, cfg.ShowMatchedValues))
+					groupSheets[group.Name].Records = appendGroupedRecord(groupSheets[group.Name].Records, rec, cfg.ShowMatchedValues)
 				}
 			}
 			continue
@@ -1279,7 +1281,7 @@ func compareDataGrouped(fieldsToCompare []string, fieldGroups []FieldGroup, data
 		for _, header := range fieldsToCompare {
 			effective := applyMapping(header, row1[header], mappingRules)
 			rec := buildGroupedDiffRecord(displayKey, header, effective, row2[header], cfg)
-			singleSheet.Records = append(singleSheet.Records, maskGroupedRecordValues(rec, cfg.ShowMatchedValues))
+			singleSheet.Records = appendGroupedRecord(singleSheet.Records, rec, cfg.ShowMatchedValues)
 		}
 
 		for _, group := range fieldGroups {
@@ -1290,7 +1292,7 @@ func compareDataGrouped(fieldsToCompare []string, fieldGroups []FieldGroup, data
 					effective = mappedGroupVals[header]
 				}
 				rec := buildGroupedDiffRecord(displayKey, header, effective, row2[header], cfg)
-				groupSheets[group.Name].Records = append(groupSheets[group.Name].Records, maskGroupedRecordValues(rec, cfg.ShowMatchedValues))
+				groupSheets[group.Name].Records = appendGroupedRecord(groupSheets[group.Name].Records, rec, cfg.ShowMatchedValues)
 			}
 		}
 	}
@@ -1319,6 +1321,7 @@ func buildGroupedDiffRecord(caseID, field, oldRaw, newRaw string, cfg Config) Gr
 	newNorm := normalizeValueForComparison(newRaw, field, cfg)
 	rawMatch := oldRaw == newRaw
 	normalizedMatch := oldNorm == newNorm
+	finalMatch := compareValues(oldRaw, newRaw, field, cfg)
 	return GroupedDiffRecord{
 		CaseID:             caseID,
 		Field:              field,
@@ -1328,21 +1331,37 @@ func buildGroupedDiffRecord(caseID, field, oldRaw, newRaw string, cfg Config) Gr
 		OldNormalizedValue: oldNorm,
 		NewNormalizedValue: newNorm,
 		NormalizedMatch:    normalizedMatch,
-		FinalStatus:        classifyFinalStatus(rawMatch, normalizedMatch),
+		FinalMatch:         finalMatch,
+		FinalStatus:        classifyFinalStatus(rawMatch, normalizedMatch, finalMatch),
+		ComparisonReason:   classifyComparisonReason(rawMatch, normalizedMatch, finalMatch),
 	}
 }
 
-func classifyFinalStatus(rawMatch, normalizedMatch bool) string {
+func classifyFinalStatus(rawMatch, normalizedMatch, finalMatch bool) string {
+	if !finalMatch {
+		return "MISMATCH"
+	}
 	switch {
 	case rawMatch && normalizedMatch:
 		return "FULL_MATCH"
 	case !rawMatch && normalizedMatch:
 		return "MATCH_AFTER_NORMALIZATION"
-	case rawMatch && !normalizedMatch:
-		return "RAW_MATCH_ONLY"
 	default:
-		return "MISMATCH"
+		return "MATCH_BY_COMPARATOR"
 	}
+}
+
+func classifyComparisonReason(rawMatch, normalizedMatch, finalMatch bool) string {
+	if !finalMatch {
+		return "mismatch"
+	}
+	if rawMatch {
+		return "equal_raw"
+	}
+	if normalizedMatch {
+		return "equal_after_normalization"
+	}
+	return "equal_by_comparator"
 }
 
 func normalizeValueForComparison(val, header string, cfg Config) string {
@@ -1361,18 +1380,11 @@ func normalizeValueForComparison(val, header string, cfg Config) string {
 	return normalized
 }
 
-func maskGroupedRecordValues(rec GroupedDiffRecord, showMatchedValues bool) GroupedDiffRecord {
-	if showMatchedValues {
-		return rec
+func appendGroupedRecord(records []GroupedDiffRecord, rec GroupedDiffRecord, showMatchedValues bool) []GroupedDiffRecord {
+	if !showMatchedValues && rec.FinalMatch {
+		return records
 	}
-	if rec.FinalStatus == "MISMATCH" {
-		return rec
-	}
-	rec.OldRawValue = ""
-	rec.NewRawValue = ""
-	rec.OldNormalizedValue = ""
-	rec.NewNormalizedValue = ""
-	return rec
+	return append(records, rec)
 }
 
 func resolveKeyFields(headers, requestedKeyFields []string) ([]string, error) {
@@ -1719,7 +1731,7 @@ func writeGroupedReportToExcel(outputPath string, sheets []GroupedSheetResult) e
 		f.DeleteSheet(defaultSheet)
 	}
 
-	headers := []string{"case_id", "field", "old_raw_value", "new_raw_value", "raw_match", "old_normalized_value", "new_normalized_value", "normalized_match", "final_status"}
+	headers := []string{"case_id", "field", "old_raw_value", "new_raw_value", "raw_match", "old_normalized_value", "new_normalized_value", "normalized_match", "final_match", "final_status", "comparison_reason"}
 	for i, sheetResult := range sheets {
 		sheetName := sheetOrder[i]
 
@@ -1727,7 +1739,7 @@ func writeGroupedReportToExcel(outputPath string, sheets []GroupedSheetResult) e
 			cell, _ := excelize.CoordinatesToCellName(c+1, 1)
 			f.SetCellValue(sheetName, cell, h)
 		}
-		if err := f.SetCellStyle(sheetName, "A1", "I1", headerStyle); err != nil {
+		if err := f.SetCellStyle(sheetName, "A1", "K1", headerStyle); err != nil {
 			return err
 		}
 		for r, rec := range sheetResult.Records {
@@ -1740,9 +1752,11 @@ func writeGroupedReportToExcel(outputPath string, sheets []GroupedSheetResult) e
 			f.SetCellValue(sheetName, fmt.Sprintf("F%d", rowNum), rec.OldNormalizedValue)
 			f.SetCellValue(sheetName, fmt.Sprintf("G%d", rowNum), rec.NewNormalizedValue)
 			f.SetCellValue(sheetName, fmt.Sprintf("H%d", rowNum), rec.NormalizedMatch)
-			f.SetCellValue(sheetName, fmt.Sprintf("I%d", rowNum), rec.FinalStatus)
+			f.SetCellValue(sheetName, fmt.Sprintf("I%d", rowNum), rec.FinalMatch)
+			f.SetCellValue(sheetName, fmt.Sprintf("J%d", rowNum), rec.FinalStatus)
+			f.SetCellValue(sheetName, fmt.Sprintf("K%d", rowNum), rec.ComparisonReason)
 		}
-		_ = f.SetColWidth(sheetName, "A", "I", 22)
+		_ = f.SetColWidth(sheetName, "A", "K", 22)
 	}
 
 	return f.SaveAs(outputPath)
