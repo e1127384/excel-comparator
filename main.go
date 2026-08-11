@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -20,19 +21,20 @@ type FieldGroup struct {
 
 // Config holds CLI configuration flags
 type Config struct {
-	File1         string       `yaml:"file1"`
-	File2         string       `yaml:"file2"`
-	Sheet1        string       `yaml:"sheet1"`
-	Sheet2        string       `yaml:"sheet2"`
-	KeyFields     []string     `yaml:"keyFields"`
-	MappingFile   string       `yaml:"mappingFile"`
-	OutputFile    string       `yaml:"outputFile"`
-	CaseSensitive bool         `yaml:"caseSensitive"`
-	StrictDate    bool         `yaml:"strictDate"`
-	NormalizeList bool         `yaml:"normalizeList"`
-	CompareFields []string     `yaml:"compareFields"`
-	CaseQualifier string       `yaml:"caseQualifier"`
-	FieldGroups   []FieldGroup `yaml:"fieldGroups"`
+	File1             string       `yaml:"file1"`
+	File2             string       `yaml:"file2"`
+	Sheet1            string       `yaml:"sheet1"`
+	Sheet2            string       `yaml:"sheet2"`
+	KeyFields         []string     `yaml:"keyFields"`
+	MappingFile       string       `yaml:"mappingFile"`
+	OutputFile        string       `yaml:"outputFile"`
+	CaseSensitive     bool         `yaml:"caseSensitive"`
+	StrictDate        bool         `yaml:"strictDate"`
+	NormalizeList     bool         `yaml:"normalizeList"`
+	CompareFields     []string     `yaml:"compareFields"`
+	CaseQualifier     string       `yaml:"caseQualifier"`
+	FieldGroups       []FieldGroup `yaml:"fieldGroups"`
+	ShowMatchedValues bool         `yaml:"showMatchedValues"`
 }
 
 const (
@@ -409,6 +411,29 @@ type FieldSummary struct {
 	MismatchCount     int
 }
 
+type GroupedDiffRecord struct {
+	CaseID             string
+	Field              string
+	OldRawValue        string
+	NewRawValue        string
+	RawMatch           bool
+	OldNormalizedValue string
+	NewNormalizedValue string
+	NormalizedMatch    bool
+	FinalStatus        string
+}
+
+type GroupedSheetResult struct {
+	SheetName string
+	Records   []GroupedDiffRecord
+}
+
+type GroupedMappingWorkbook struct {
+	SingleFieldRules MappingRule
+	GroupRules       GroupMappingRule
+	Groups           []FieldGroup
+}
+
 // MappingRule stores value translations: FieldName -> {OldVal -> NewVal}
 type MappingRule map[string]map[string]string
 
@@ -425,6 +450,7 @@ type GroupMappingRule map[string]map[string]map[string]string
 func main() {
 	// Define CLI flag for config file path
 	configPath := flag.String("config", "config.yaml", "Path to configuration YAML file")
+	showMatchedValues := flag.Bool("show-matched-values", false, "Show old/new values for matched rows in grouped output mode")
 	flag.Parse()
 
 	cfg, err := loadConfig(*configPath)
@@ -434,6 +460,9 @@ func main() {
 
 	if cfg.File1 == "" || cfg.File2 == "" {
 		log.Fatal("Error: file1 and file2 are required in config.yaml")
+	}
+	if *showMatchedValues {
+		cfg.ShowMatchedValues = true
 	}
 
 	var qualExpr QualExpr
@@ -456,14 +485,25 @@ func main() {
 	// Load Migration Mapping Rules if provided
 	var mappingRules MappingRule
 	var groupMappingRules GroupMappingRule
+	var groupedWorkbook GroupedMappingWorkbook
+	groupedMode := false
 	if cfg.MappingFile != "" {
-		mappingRules, err = loadMappingRules(cfg.MappingFile)
+		groupedWorkbook, groupedMode, err = loadGroupedMappingWorkbook(cfg.MappingFile)
 		if err != nil {
-			log.Fatalf("Failed to load mapping file: %v", err)
+			log.Fatalf("Failed to load grouped mapping workbook: %v", err)
 		}
-		groupMappingRules, err = loadGroupMappingRules(cfg.MappingFile, cfg.FieldGroups)
-		if err != nil {
-			log.Fatalf("Failed to load group mapping rules: %v", err)
+		if groupedMode {
+			mappingRules = groupedWorkbook.SingleFieldRules
+			groupMappingRules = groupedWorkbook.GroupRules
+		} else {
+			mappingRules, err = loadMappingRules(cfg.MappingFile)
+			if err != nil {
+				log.Fatalf("Failed to load mapping file: %v", err)
+			}
+			groupMappingRules, err = loadGroupMappingRules(cfg.MappingFile, cfg.FieldGroups)
+			if err != nil {
+				log.Fatalf("Failed to load group mapping rules: %v", err)
+			}
 		}
 	}
 
@@ -480,7 +520,11 @@ func main() {
 
 	fmt.Printf("  Key Fields: %s\n", strings.Join(resolvedKeyFields, ", "))
 
-	fieldsToCompare, resolvedGroups, err := resolveFieldsToCompare(headers1, cfg.CompareFields, cfg.FieldGroups)
+	configuredGroups := cfg.FieldGroups
+	if groupedMode && len(groupedWorkbook.Groups) > 0 {
+		configuredGroups = groupedWorkbook.Groups
+	}
+	fieldsToCompare, resolvedGroups, err := resolveFieldsToCompare(headers1, cfg.CompareFields, configuredGroups)
 	if err != nil {
 		log.Fatalf("Failed to resolve compare fields: %v", err)
 	}
@@ -494,12 +538,19 @@ func main() {
 		}
 	}
 
-	// Run Analysis and collect discrepancy records
-	records, fieldSummaries := compareData(fieldsToCompare, resolvedGroups, data1, data2, keyDisplay1, mappingRules, groupMappingRules, cfg, qualExpr)
+	if groupedMode {
+		groupResults := compareDataGrouped(fieldsToCompare, resolvedGroups, data1, data2, keyDisplay1, mappingRules, groupMappingRules, cfg, qualExpr)
+		if err := writeGroupedReportToExcel(cfg.OutputFile, groupResults); err != nil {
+			log.Fatalf("Failed to write grouped output report Excel: %v", err)
+		}
+	} else {
+		// Run Analysis and collect discrepancy records
+		records, fieldSummaries := compareData(fieldsToCompare, resolvedGroups, data1, data2, keyDisplay1, mappingRules, groupMappingRules, cfg, qualExpr)
 
-	// Export results to Excel
-	if err := writeReportToExcel(cfg.OutputFile, records, fieldSummaries); err != nil {
-		log.Fatalf("Failed to write output report Excel: %v", err)
+		// Export results to Excel
+		if err := writeReportToExcel(cfg.OutputFile, records, fieldSummaries); err != nil {
+			log.Fatalf("Failed to write output report Excel: %v", err)
+		}
 	}
 
 	fmt.Printf("\n[Success] Analysis report successfully generated: %s\n", cfg.OutputFile)
@@ -508,10 +559,11 @@ func main() {
 // loadConfig reads configuration from a YAML file and applies defaults
 func loadConfig(configPath string) (Config, error) {
 	cfg := Config{
-		Sheet1:        "Sheet1",
-		Sheet2:        "Sheet1",
-		OutputFile:    "comparison_report.xlsx",
-		NormalizeList: true,
+		Sheet1:            "Sheet1",
+		Sheet2:            "Sheet1",
+		OutputFile:        "comparison_report.xlsx",
+		NormalizeList:     true,
+		ShowMatchedValues: false,
 	}
 
 	data, err := os.ReadFile(configPath)
@@ -524,6 +576,229 @@ func loadConfig(configPath string) (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func loadGroupedMappingWorkbook(filePath string) (GroupedMappingWorkbook, bool, error) {
+	f, err := excelize.OpenFile(filePath)
+	if err != nil {
+		return GroupedMappingWorkbook{}, false, err
+	}
+	defer f.Close()
+
+	sheets := f.GetSheetList()
+	hasSingleFields := false
+	for _, s := range sheets {
+		if strings.EqualFold(strings.TrimSpace(s), "SingleFields") {
+			hasSingleFields = true
+			break
+		}
+	}
+	if !hasSingleFields {
+		return GroupedMappingWorkbook{}, false, nil
+	}
+
+	wb := GroupedMappingWorkbook{
+		SingleFieldRules: make(MappingRule),
+		GroupRules:       make(GroupMappingRule),
+		Groups:           make([]FieldGroup, 0),
+	}
+
+	for _, sheetName := range sheets {
+		trimmedSheet := strings.TrimSpace(sheetName)
+		if strings.EqualFold(trimmedSheet, "SingleFields") {
+			parseSingleFieldMappingSheet(f, sheetName, wb.SingleFieldRules)
+			continue
+		}
+		group, rules, ok := parseGroupedMappingSheet(f, sheetName)
+		if !ok {
+			continue
+		}
+		wb.Groups = append(wb.Groups, group)
+		wb.GroupRules[group.Name] = rules
+	}
+
+	return wb, true, nil
+}
+
+func parseSingleFieldMappingSheet(f *excelize.File, sheetName string, rules MappingRule) {
+	rows, err := f.GetRows(sheetName)
+	if err != nil {
+		log.Printf("Warning: unable to read sheet %q: %v", sheetName, err)
+		return
+	}
+	if len(rows) == 0 {
+		return
+	}
+	headerIdx := make(map[string]int)
+	for i, h := range rows[0] {
+		headerIdx[strings.ToLower(strings.TrimSpace(h))] = i
+	}
+	fieldCol, okField := headerIdx["fieldname"]
+	oldCol, okOld := headerIdx["oldvalue"]
+	newCol, okNew := headerIdx["newvalue"]
+	if !okField || !okOld {
+		log.Printf("Warning: sheet %q missing required columns FieldName/OldValue; skipping", sheetName)
+		return
+	}
+	if !okNew {
+		log.Printf("Warning: sheet %q missing optional NewValue column; defaulting NewValue to OldValue", sheetName)
+	}
+
+	for i := 1; i < len(rows); i++ {
+		row := rows[i]
+		field := cellAt(row, fieldCol)
+		oldVal := cellAt(row, oldCol)
+		newVal := oldVal
+		if okNew {
+			newVal = cellAt(row, newCol)
+		}
+		if field == "" {
+			if strings.TrimSpace(strings.Join(row, "")) != "" {
+				log.Printf("Warning: sheet %q row %d has empty FieldName; skipping row", sheetName, i+1)
+			}
+			continue
+		}
+		if rules[field] == nil {
+			rules[field] = make(map[string]string)
+		}
+		rules[field][oldVal] = newVal
+	}
+}
+
+func parseGroupedMappingSheet(f *excelize.File, sheetName string) (FieldGroup, map[string]map[string]string, bool) {
+	rows, err := f.GetRows(sheetName)
+	if err != nil {
+		log.Printf("Warning: unable to read group sheet %q: %v", sheetName, err)
+		return FieldGroup{}, nil, false
+	}
+	if len(rows) < 2 {
+		return FieldGroup{}, nil, false
+	}
+
+	headers := rows[0]
+	fields, oldCols, newCols, ok := parseGroupHeaderColumns(headers)
+	if !ok || len(fields) == 0 {
+		log.Printf("Warning: group sheet %q has malformed header; expected old/new columns for each field", sheetName)
+		return FieldGroup{}, nil, false
+	}
+
+	rules := make(map[string]map[string]string)
+	for i := 1; i < len(rows); i++ {
+		row := rows[i]
+		oldVals := make([]string, len(fields))
+		newVals := make(map[string]string, len(fields))
+		for j, field := range fields {
+			oldVals[j] = cellAt(row, oldCols[j])
+			newVal := oldVals[j]
+			if newCols[j] >= 0 {
+				newVal = cellAt(row, newCols[j])
+			}
+			newVals[field] = newVal
+		}
+		allBlank := true
+		for _, v := range oldVals {
+			if strings.TrimSpace(v) != "" {
+				allBlank = false
+				break
+			}
+		}
+		if allBlank {
+			continue
+		}
+		rules[strings.Join(oldVals, "\x00")] = newVals
+	}
+
+	return FieldGroup{Name: sheetName, Fields: fields}, rules, true
+}
+
+func parseGroupHeaderColumns(headers []string) ([]string, []int, []int, bool) {
+	trimmed := make([]string, len(headers))
+	for i, h := range headers {
+		trimmed[i] = strings.TrimSpace(h)
+	}
+
+	nonEmpty := make([]int, 0, len(trimmed))
+	for i, h := range trimmed {
+		if h != "" {
+			nonEmpty = append(nonEmpty, i)
+		}
+	}
+	if len(nonEmpty) < 2 {
+		return nil, nil, nil, false
+	}
+
+	oldByField := make(map[string]int)
+	newByField := make(map[string]int)
+	var orderedFields []string
+	for _, idx := range nonEmpty {
+		h := strings.ToLower(trimmed[idx])
+		if strings.HasPrefix(h, "old_") {
+			field := strings.TrimSpace(trimmed[idx][4:])
+			if field == "" {
+				continue
+			}
+			l := strings.ToLower(field)
+			if _, exists := oldByField[l]; !exists {
+				orderedFields = append(orderedFields, field)
+			}
+			oldByField[l] = idx
+		} else if strings.HasPrefix(h, "new_") {
+			field := strings.TrimSpace(trimmed[idx][4:])
+			if field == "" {
+				continue
+			}
+			newByField[strings.ToLower(field)] = idx
+		}
+	}
+	if len(oldByField) > 0 {
+		fields := make([]string, 0, len(orderedFields))
+		oldCols := make([]int, 0, len(orderedFields))
+		newCols := make([]int, 0, len(orderedFields))
+		for _, field := range orderedFields {
+			l := strings.ToLower(field)
+			oldCol, ok := oldByField[l]
+			if !ok {
+				continue
+			}
+			fields = append(fields, field)
+			oldCols = append(oldCols, oldCol)
+			if newCol, ok := newByField[l]; ok {
+				newCols = append(newCols, newCol)
+			} else {
+				newCols = append(newCols, -1)
+			}
+		}
+		if len(fields) > 0 {
+			return fields, oldCols, newCols, true
+		}
+	}
+
+	if len(nonEmpty)%2 != 0 {
+		return nil, nil, nil, false
+	}
+	n := len(nonEmpty) / 2
+	fields := make([]string, 0, n)
+	oldCols := make([]int, 0, n)
+	newCols := make([]int, 0, n)
+	for i := 0; i < n; i++ {
+		leftCol := nonEmpty[i]
+		rightCol := nonEmpty[i+n]
+		field := trimmed[leftCol]
+		if field == "" {
+			return nil, nil, nil, false
+		}
+		fields = append(fields, field)
+		oldCols = append(oldCols, leftCol)
+		newCols = append(newCols, rightCol)
+	}
+	return fields, oldCols, newCols, true
+}
+
+func cellAt(row []string, idx int) string {
+	if idx < 0 || idx >= len(row) {
+		return ""
+	}
+	return strings.TrimSpace(row[idx])
 }
 
 // resolveFieldsToCompare returns header names to compare, optionally filtered by configured fields.
@@ -960,6 +1235,146 @@ func compareData(fieldsToCompare []string, fieldGroups []FieldGroup, data1, data
 	return records, summaries
 }
 
+func compareDataGrouped(fieldsToCompare []string, fieldGroups []FieldGroup, data1, data2 map[string]map[string]string, keyDisplay1 map[string]string, mappingRules MappingRule, groupMappingRules GroupMappingRule, cfg Config, qualExpr QualExpr) []GroupedSheetResult {
+	filteredData1 := data1
+	if qualExpr != nil {
+		filteredData1 = make(map[string]map[string]string)
+		for caseKey, row := range data1 {
+			if qualExpr.Evaluate(row, cfg.CaseSensitive) {
+				filteredData1[caseKey] = row
+			}
+		}
+	}
+
+	singleSheet := GroupedSheetResult{SheetName: "SingleFields"}
+	groupSheets := make(map[string]*GroupedSheetResult, len(fieldGroups))
+
+	for _, group := range fieldGroups {
+		groupSheets[group.Name] = &GroupedSheetResult{SheetName: group.Name}
+	}
+
+	keys := sortedMapKeys(filteredData1)
+	for _, caseKey := range keys {
+		row1 := filteredData1[caseKey]
+		row2, exists := data2[caseKey]
+		displayKey := keyDisplay1[caseKey]
+		if !exists {
+			for _, header := range fieldsToCompare {
+				rec := buildGroupedDiffRecord(displayKey, header, applyMapping(header, row1[header], mappingRules), "", header, cfg)
+				singleSheet.Records = append(singleSheet.Records, maskGroupedRecordValues(rec, cfg.ShowMatchedValues))
+			}
+			for _, group := range fieldGroups {
+				for _, header := range group.Fields {
+					effective := applyMapping(header, row1[header], mappingRules)
+					if mapped := applyGroupMapping(group.Name, row1, group.Fields, groupMappingRules); mapped != nil {
+						effective = mapped[header]
+					}
+					rec := buildGroupedDiffRecord(displayKey, header, effective, "", header, cfg)
+					groupSheets[group.Name].Records = append(groupSheets[group.Name].Records, maskGroupedRecordValues(rec, cfg.ShowMatchedValues))
+				}
+			}
+			continue
+		}
+
+		for _, header := range fieldsToCompare {
+			effective := applyMapping(header, row1[header], mappingRules)
+			rec := buildGroupedDiffRecord(displayKey, header, effective, row2[header], header, cfg)
+			singleSheet.Records = append(singleSheet.Records, maskGroupedRecordValues(rec, cfg.ShowMatchedValues))
+		}
+
+		for _, group := range fieldGroups {
+			mappedGroupVals := applyGroupMapping(group.Name, row1, group.Fields, groupMappingRules)
+			for _, header := range group.Fields {
+				effective := applyMapping(header, row1[header], mappingRules)
+				if mappedGroupVals != nil {
+					effective = mappedGroupVals[header]
+				}
+				rec := buildGroupedDiffRecord(displayKey, header, effective, row2[header], header, cfg)
+				groupSheets[group.Name].Records = append(groupSheets[group.Name].Records, maskGroupedRecordValues(rec, cfg.ShowMatchedValues))
+			}
+		}
+	}
+
+	finalResults := make([]GroupedSheetResult, 0, 1+len(fieldGroups))
+	finalResults = append(finalResults, singleSheet)
+	for _, group := range fieldGroups {
+		if sheet, ok := groupSheets[group.Name]; ok {
+			finalResults = append(finalResults, *sheet)
+		}
+	}
+	return finalResults
+}
+
+func sortedMapKeys(m map[string]map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func buildGroupedDiffRecord(caseID, field, oldRaw, newRaw, header string, cfg Config) GroupedDiffRecord {
+	oldNorm := normalizeValueForComparison(oldRaw, header, cfg)
+	newNorm := normalizeValueForComparison(newRaw, header, cfg)
+	rawMatch := oldRaw == newRaw
+	normalizedMatch := oldNorm == newNorm
+	return GroupedDiffRecord{
+		CaseID:             caseID,
+		Field:              field,
+		OldRawValue:        oldRaw,
+		NewRawValue:        newRaw,
+		RawMatch:           rawMatch,
+		OldNormalizedValue: oldNorm,
+		NewNormalizedValue: newNorm,
+		NormalizedMatch:    normalizedMatch,
+		FinalStatus:        classifyFinalStatus(rawMatch, normalizedMatch),
+	}
+}
+
+func classifyFinalStatus(rawMatch, normalizedMatch bool) string {
+	switch {
+	case rawMatch && normalizedMatch:
+		return "FULL_MATCH"
+	case !rawMatch && normalizedMatch:
+		return "MATCH_AFTER_NORMALIZATION"
+	case rawMatch && !normalizedMatch:
+		return "RAW_MATCH_ONLY"
+	default:
+		return "MISMATCH"
+	}
+}
+
+func normalizeValueForComparison(val, header string, cfg Config) string {
+	normalized := val
+	if !cfg.CaseSensitive {
+		normalized = strings.ToLower(normalized)
+	}
+	if cfg.NormalizeList {
+		normalized = normalizeListString(normalized)
+	}
+	if !cfg.StrictDate && isDateHeaderOrValue(header, val) {
+		if parsed, err := parseDate(val); err == nil {
+			normalized = parsed.Format("2006-01-02")
+		}
+	}
+	return normalized
+}
+
+func maskGroupedRecordValues(rec GroupedDiffRecord, showMatchedValues bool) GroupedDiffRecord {
+	if showMatchedValues {
+		return rec
+	}
+	if rec.FinalStatus == "MISMATCH" {
+		return rec
+	}
+	rec.OldRawValue = ""
+	rec.NewRawValue = ""
+	rec.OldNormalizedValue = ""
+	rec.NewNormalizedValue = ""
+	return rec
+}
+
 func resolveKeyFields(headers, requestedKeyFields []string) ([]string, error) {
 	if len(headers) == 0 {
 		return nil, fmt.Errorf("missing header row")
@@ -1264,6 +1679,128 @@ func writeReportToExcel(outputPath string, records []DiffRecord, summaries []Fie
 	}
 
 	return nil
+}
+
+func writeGroupedReportToExcel(outputPath string, sheets []GroupedSheetResult) error {
+	f := excelize.NewFile()
+	defaultSheet := f.GetSheetName(0)
+
+	headerStyle, err := f.NewStyle(&excelize.Style{
+		Font: &excelize.Font{Bold: true},
+		Fill: excelize.Fill{
+			Type:    "pattern",
+			Color:   []string{"#D9E1F2"},
+			Pattern: 1,
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	sheetOrder := buildOutputSheetOrder(sheets)
+	for i, sheet := range sheetOrder {
+		index, err := f.NewSheet(sheet)
+		if err != nil {
+			return err
+		}
+		if i == 0 {
+			f.SetActiveSheet(index)
+		}
+	}
+	if defaultSheet != "" {
+		f.DeleteSheet(defaultSheet)
+	}
+
+	headers := []string{"case_id", "field", "old_raw_value", "new_raw_value", "raw_match", "old_normalized_value", "new_normalized_value", "normalized_match", "final_status"}
+	for i, sheetResult := range sheets {
+		sheetName := sheetOrder[i]
+
+		for c, h := range headers {
+			cell, _ := excelize.CoordinatesToCellName(c+1, 1)
+			f.SetCellValue(sheetName, cell, h)
+		}
+		if err := f.SetCellStyle(sheetName, "A1", "I1", headerStyle); err != nil {
+			return err
+		}
+		for r, rec := range sheetResult.Records {
+			rowNum := r + 2
+			f.SetCellValue(sheetName, fmt.Sprintf("A%d", rowNum), rec.CaseID)
+			f.SetCellValue(sheetName, fmt.Sprintf("B%d", rowNum), rec.Field)
+			f.SetCellValue(sheetName, fmt.Sprintf("C%d", rowNum), rec.OldRawValue)
+			f.SetCellValue(sheetName, fmt.Sprintf("D%d", rowNum), rec.NewRawValue)
+			f.SetCellValue(sheetName, fmt.Sprintf("E%d", rowNum), rec.RawMatch)
+			f.SetCellValue(sheetName, fmt.Sprintf("F%d", rowNum), rec.OldNormalizedValue)
+			f.SetCellValue(sheetName, fmt.Sprintf("G%d", rowNum), rec.NewNormalizedValue)
+			f.SetCellValue(sheetName, fmt.Sprintf("H%d", rowNum), rec.NormalizedMatch)
+			f.SetCellValue(sheetName, fmt.Sprintf("I%d", rowNum), rec.FinalStatus)
+		}
+		_ = f.SetColWidth(sheetName, "A", "I", 22)
+	}
+
+	return f.SaveAs(outputPath)
+}
+
+func buildOutputSheetOrder(sheets []GroupedSheetResult) []string {
+	input := make([]string, 0, len(sheets))
+	for _, s := range sheets {
+		input = append(input, s.SheetName)
+	}
+	return sanitizeAndDedupeSheetNames(input)
+}
+
+func sanitizeAndDedupeSheetNames(names []string) []string {
+	out := make([]string, 0, len(names))
+	used := make(map[string]struct{})
+	baseCounts := make(map[string]int)
+	for _, n := range names {
+		base := sanitizeExcelSheetName(n)
+		baseCounts[base]++
+		candidate := base
+		if _, exists := used[candidate]; exists {
+			for i := baseCounts[base]; ; i++ {
+				suffix := fmt.Sprintf("_%d", i)
+				candidate = truncateSheetName(base, 31-len(suffix)) + suffix
+				if _, exists := used[candidate]; !exists {
+					break
+				}
+			}
+		}
+		used[candidate] = struct{}{}
+		out = append(out, candidate)
+	}
+	return out
+}
+
+func sanitizeExcelSheetName(name string) string {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		trimmed = "Sheet"
+	}
+	replacer := strings.NewReplacer(
+		":", "_",
+		"\\", "_",
+		"/", "_",
+		"?", "_",
+		"*", "_",
+		"[", "_",
+		"]", "_",
+	)
+	clean := replacer.Replace(trimmed)
+	clean = strings.Trim(clean, "'")
+	if clean == "" {
+		clean = "Sheet"
+	}
+	return truncateSheetName(clean, 31)
+}
+
+func truncateSheetName(name string, maxLen int) string {
+	if maxLen <= 0 {
+		return ""
+	}
+	if len(name) <= maxLen {
+		return name
+	}
+	return name[:maxLen]
 }
 
 func determineRAGStatus(comparedCount, mismatchCount, redStyle, amberStyle, greenStyle int) (string, int) {

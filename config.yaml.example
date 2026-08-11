@@ -10,6 +10,7 @@ outputFile: comparison_report.xlsx
 caseSensitive: false
 strictDate: false
 normalizeList: true
+showMatchedValues: false
 compareFields: []
 caseQualifier: ""
 fieldGroups: []
@@ -30,3 +31,6 @@ fieldGroups: []
 #     fields: [country, sub-region, region]
 #   - name: "Classification"
 #     fields: [category, sub-category]
+#
+# showMatchedValues controls grouped output mode only. When true, old/new raw and
+# normalized values remain visible even when a row is a match.
